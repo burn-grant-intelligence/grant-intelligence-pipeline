@@ -1,0 +1,32 @@
+name: Grant scan
+
+on:
+  schedule:
+    # Every 2 hours, Monday-Friday only (UTC). Comfortably within GitHub's free
+    # private-repo Actions minutes at this frequency — see README for the math.
+    - cron: '0 */2 * * 1-5'
+  workflow_dispatch: {} # lets you trigger a scan manually from the Actions tab
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run scan
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: node scripts/scan.mjs

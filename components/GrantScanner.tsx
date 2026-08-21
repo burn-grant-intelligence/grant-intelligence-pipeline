@@ -59,10 +59,18 @@ export default function GrantScanner() {
     );
   }
 
+    // Strips casing, spaces, and punctuation so "AI / data" (button label) matches
+  // "ai/data" or "AI-Data" (whatever variant the scraper happened to store).
+  function normalizeTag(s: string) {
+    return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+
   const filteredGrants = useMemo(() => {
     return grants.filter((g) => {
       if (activeFocusAreas.length > 0) {
-        const overlap = g.focus_areas?.some((a) => activeFocusAreas.includes(a));
+        const overlap = g.focus_areas?.some((a) =>
+          activeFocusAreas.some((active) => normalizeTag(a) === normalizeTag(active))
+        );
         if (!overlap) return false;
       }
       if (minValue > 0 && (!g.amount || g.amount < minValue)) return false;

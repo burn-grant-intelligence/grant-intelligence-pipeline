@@ -20,11 +20,11 @@ if (!process.env.GROQ_API_KEY) {
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // If this model name ever 404s, check console.groq.com/docs/models for the current
-// list of available free models and swap it here — everything else stays the same.
+// list of available models and swap it here — everything else stays the same.
 const GROQ_MODEL = "openai/gpt-oss-20b";
 
 const EXTRACTION_SYSTEM_PROMPT = `You extract structured grant/funding opportunity data from raw web text.
-Return ONLY a JSON object of the shape:
+Respond with ONLY a JSON object — no markdown code fences, no explanation before or after — of the shape:
 { "grants": [ { ... }, ... ] }
 
 Each item in "grants" must have exactly these fields (use null for anything not stated in the text — never guess or invent values):
@@ -41,23 +41,42 @@ Each item in "grants" must have exactly these fields (use null for anything not 
   "application_url": string | null
 }
 
-If the text describes no funding opportunity at all, return { "grants": [] }.`;
+If the text describes no funding opportunity at all, respond with exactly: { "grants": [] }`;
+
+// Pulls the first {...} block out of a string, in case the model adds stray
+// text or markdown fences around the JSON despite instructions not to.
+function extractJsonObject(text) {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = fenced ? fenced[1] : text;
+  const braceMatch = candidate.match(/\{[\s\S]*\}/);
+  return braceMatch ? braceMatch[0] : candidate;
+}
 
 async function extractGrants(rawText) {
-  const completion = await groq.chat.completions.create({
-    model: GROQ_MODEL,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
-      { role: "user", content: rawText.slice(0, 15000) },
-    ],
-  });
-  const text = completion.choices[0]?.message?.content ?? "{}";
+  let text = "";
   try {
-    const parsed = JSON.parse(text);
+    const completion = await groq.chat.completions.create({
+      model: GROQ_MODEL,
+      reasoning_effort: "low", // this is a reasoning model; keep it light for a simple extraction task
+      max_completion_tokens: 2048,
+      messages: [
+        { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+        { role: "user", content: rawText.slice(0, 15000) },
+      ],
+    });
+    text = completion.choices[0]?.message?.content ?? "{}";
+  } catch (err) {
+    // Network error, rate limit, or the model/provider itself erroring out —
+    // log and skip this one page rather than crashing the whole scan run.
+    console.error("  ! Groq request failed:", err.message);
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(extractJsonObject(text));
     return Array.isArray(parsed.grants) ? parsed.grants : [];
   } catch {
-    console.error("Failed to parse Groq output as JSON:", text.slice(0, 300));
+    console.error("  ! Failed to parse Groq output as JSON:", text.slice(0, 300));
     return [];
   }
 }

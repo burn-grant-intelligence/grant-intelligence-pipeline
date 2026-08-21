@@ -21,7 +21,7 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // If this model name ever 404s, check console.groq.com/docs/models for the current
 // list of available free models and swap it here — everything else stays the same.
-const GROQ_MODEL = "llama-3.3-70b-versatile";
+const GROQ_MODEL = "openai/gpt-oss-20b";
 
 const EXTRACTION_SYSTEM_PROMPT = `You extract structured grant/funding opportunity data from raw web text.
 Return ONLY a JSON object of the shape:

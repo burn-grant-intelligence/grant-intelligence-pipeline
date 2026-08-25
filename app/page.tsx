@@ -11,26 +11,29 @@ export default function Home() {
 
   return (
     <div className="flex flex-col flex-1">
-      <header className="border-b border-neutral-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+      <header className="bg-[var(--ink)] text-[#f7f5f1]">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 pt-6 pb-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-orange-600 text-white">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full border border-[var(--accent)] bg-[var(--accent)]/10 text-lg">
               🔥
             </div>
             <div>
-              <h1 className="text-lg font-semibold leading-tight">Grant Intelligence</h1>
-              <p className="text-xs text-neutral-500">
-                BURN Manufacturing · Daily funding discovery
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
+                BURN Manufacturing
               </p>
+              <h1 className="font-serif-display text-2xl leading-tight tracking-tight">
+                Grant Intelligence
+              </h1>
             </div>
           </div>
+          <p className="hidden text-xs text-white/50 sm:block">Funding discovery &amp; pipeline tracking</p>
         </div>
-        <div className="mx-auto flex max-w-6xl gap-1 px-6">
+        <div className="mx-auto flex max-w-6xl gap-1 border-t border-white/10 px-6">
           <TabButton active={tab === "scanner"} onClick={() => setTab("scanner")}>
-            🔍 Grant Scanner
+            Grant Scanner
           </TabButton>
           <TabButton active={tab === "tracker"} onClick={() => setTab("tracker")}>
-            📋 Application Tracker
+            Application Tracker
           </TabButton>
         </div>
       </header>
@@ -54,10 +57,10 @@ function TabButton({
   return (
     <button
       onClick={onClick}
-      className={`border-b-2 px-3 py-3 text-sm font-medium transition-colors ${
+      className={`mr-6 border-b-2 px-1 py-3 text-sm font-medium tracking-wide transition-colors ${
         active
-          ? "border-orange-600 text-orange-600"
-          : "border-transparent text-neutral-500 hover:text-neutral-800"
+          ? "border-[var(--accent)] text-white"
+          : "border-transparent text-white/50 hover:text-white/80"
       }`}
     >
       {children}

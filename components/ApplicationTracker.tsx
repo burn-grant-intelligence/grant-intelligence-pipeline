@@ -38,11 +38,27 @@ export default function ApplicationTracker() {
   }
 
   const counts = useMemo(() => {
-    const base: Record<string, number> = { total: items.length, in_progress: 0, submitted: 0, won: 0 };
+    const base: Record<string, number> = {
+      total: items.length,
+      in_progress: 0,
+      submitted: 0,
+      won: 0,
+      overdue: 0,
+    };
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     for (const item of items) {
       if (["tracking", "researching", "drafting"].includes(item.status)) base.in_progress++;
       if (item.status === "submitted") base.submitted++;
       if (item.status === "won") base.won++;
+
+      const isOpen = !["won", "lost"].includes(item.status);
+      const deadline = item.grant?.deadline;
+      if (isOpen && deadline) {
+        const due = new Date(deadline);
+        if (!isNaN(due.getTime()) && due.getTime() < today.getTime()) base.overdue++;
+      }
     }
     return base;
   }, [items]);
@@ -86,11 +102,12 @@ export default function ApplicationTracker() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
         <StatTile label="Total tracked" value={counts.total} color="text-neutral-800" />
         <StatTile label="In progress" value={counts.in_progress} color="text-neutral-800" />
         <StatTile label="Submitted" value={counts.submitted} color="text-neutral-800" />
         <StatTile label="Won 🎉" value={counts.won} color="text-emerald-600" />
+        <StatTile label="Overdue" value={counts.overdue} color="text-red-600" />
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -156,7 +173,12 @@ export default function ApplicationTracker() {
           >
             <div>
               <p className="font-medium text-neutral-800">{item.grant?.title ?? "(untitled grant)"}</p>
-              {item.grant?.funder && <p className="text-sm text-neutral-500">{item.grant.funder}</p>}
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                {item.grant?.funder && (
+                  <span className="text-sm text-neutral-500">{item.grant.funder}</span>
+                )}
+                <DeadlineBadge deadline={item.grant?.deadline} />
+              </div>
             </div>
             <select
               value={item.status}
@@ -205,5 +227,37 @@ function FilterPill({
     >
       {children}
     </button>
+  );
+}
+
+function DeadlineBadge({ deadline }: { deadline: string | null | undefined }) {
+  if (!deadline) return null;
+  const due = new Date(deadline);
+  if (isNaN(due.getTime())) return null;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diffDays = Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+  let label: string;
+  let toneClasses: string;
+  if (diffDays < 0) {
+    label = `Overdue by ${Math.abs(diffDays)}d`;
+    toneClasses = "border-red-200 bg-red-50 text-red-700";
+  } else if (diffDays === 0) {
+    label = "Due today";
+    toneClasses = "border-amber-200 bg-amber-50 text-amber-700";
+  } else if (diffDays <= 14) {
+    label = `Due in ${diffDays}d`;
+    toneClasses = "border-amber-200 bg-amber-50 text-amber-700";
+  } else {
+    label = `Due ${deadline}`;
+    toneClasses = "border-neutral-200 bg-neutral-50 text-neutral-500";
+  }
+
+  return (
+    <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${toneClasses}`}>
+      {label}
+    </span>
   );
 }

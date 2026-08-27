@@ -69,6 +69,7 @@ Do NOT include an item in "grants" at all if the text is:
 - News reporting that a specific named company or organization has ALREADY secured, raised, received, won, been awarded, or closed a round of funding (e.g. "EcoNomad Solutions Secures £230K for..."). That is reporting someone else's past outcome, not an open call for applications.
 - A general venture capital / equity investment story, not a grant or donor program.
 - A funding round, program, or deadline that has already closed, with no indication of a new or recurring open cycle.
+- Primarily an agriculture opportunity — on-farm equipment, agricultural inputs, crop or livestock production, agri-processing, or farm-level energy systems — unless it specifically funds clean cookstove manufacturing or distribution. BURN is a clean cookstove company; general agriculture funding should be excluded entirely.
 
 Only include an item if it describes a program, fund, or call that a reader could realistically apply to — i.e. it has (or clearly implies) open applications, eligibility criteria, or a way to apply.
 

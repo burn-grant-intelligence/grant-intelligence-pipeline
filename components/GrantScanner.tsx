@@ -276,7 +276,7 @@ export default function GrantScanner() {
 
                   <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                     {grant.application_url ? (
-                      
+                     <a
                         href={grant.application_url}
                         target="_blank"
                         rel="noopener noreferrer"

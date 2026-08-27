@@ -36,6 +36,7 @@ export interface Grant {
   eligibility: string | null;
   description: string | null;
   application_url: string | null;
+  fit_analysis: string | null;
   relevance_score: number | null;
   first_seen_at: string;
   last_seen_at: string;

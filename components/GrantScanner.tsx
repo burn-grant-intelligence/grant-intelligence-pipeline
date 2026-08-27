@@ -239,14 +239,32 @@ export default function GrantScanner() {
                 {grant.geography && <span>{grant.geography}</span>}
               </div>
 
-              {grant.description && (
-                <p className={`mt-3 text-sm text-neutral-600 ${open ? "" : "line-clamp-2"}`}>
-                  {grant.description}
+              {!open && (grant.fit_analysis || grant.description) && (
+                <p className="mt-3 line-clamp-2 text-sm text-neutral-600">
+                  {grant.fit_analysis || grant.description}
                 </p>
               )}
 
               {open && (
-                <div className="mt-4 space-y-3 border-t border-[var(--border)] pt-4">
+                <div className="mt-4 space-y-4 border-t border-[var(--border)] pt-4">
+                  {grant.fit_analysis && (
+                    <div className="rounded-md border-l-4 border-[var(--accent)] bg-[var(--accent-soft)] p-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent-dark)]">
+                        Fit for BURN
+                      </p>
+                      <p className="mt-1 text-sm text-neutral-700">{grant.fit_analysis}</p>
+                    </div>
+                  )}
+
+                  {grant.description && (
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--ink-muted)]">
+                        Summary
+                      </p>
+                      <p className="mt-1 text-sm text-neutral-600">{grant.description}</p>
+                    </div>
+                  )}
+
                   {grant.eligibility && (
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--ink-muted)]">
@@ -255,6 +273,7 @@ export default function GrantScanner() {
                       <p className="mt-1 text-sm text-neutral-600">{grant.eligibility}</p>
                     </div>
                   )}
+
                   <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                     {grant.application_url ? (
                       

@@ -348,7 +348,7 @@ async function main() {
 
   // Only run Google Search discovery once a day (at the midnight UTC run),
   // to stay comfortably within Google's free 100-searches/day quota.
-  const shouldDiscover = new Date().getUTCHours() === 0;
+  const shouldDiscover = true;
   if (shouldDiscover) {
     console.log("Running Google Search discovery (once-daily window)...");
     const discovered = await discoverCandidateUrls();

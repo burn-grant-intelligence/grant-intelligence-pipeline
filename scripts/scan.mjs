@@ -3,7 +3,8 @@
 // Grant Intelligence scraper connector.
 // Reads sources (RSS or plain HTML) from Supabase, extracts structured grant
 // fields via Groq's free-tier LLM API, and upserts results back into Supabase
-// with dedup by content hash.
+// with dedup by content hash. Once a day, also runs a small batch of Google
+// searches to discover new candidate pages beyond the fixed source list.
 //
 // Run locally:  node scripts/scan.mjs
 // Run in CI:    see .github/workflows/daily-scan.yml
@@ -33,9 +34,7 @@ const BURN_PROFILE = `BURN Manufacturing — company profile for grant-fit asses
 - Carbon finance: a vertically integrated carbon project developer, 5M+ carbon credits issued, certified by Gold Standard and MMECD — strong fit for carbon finance, results-based financing, and climate-linked funding.
 - Distribution: an established last-mile distribution network across its countries of operation.
 - Gender: products and programs center women as primary household cooking-fuel decision-makers and beneficiaries.
-- Funding BURN typically seeks: grants, catalytic/concessional funding, results-based financing, R&D funding, and scale-up/working capital. BURN is generally NOT a fit for micro-loans or funding explicitly reserved for small/early-stage/first-time operators.
-- Strong-fit program patterns: results-based financing (RBF) programs for clean cooking, calls for proposals / "Call4Solutions" / tenders specifically for cookstove distribution or manufacturing, institutional and school-cooking programs, and higher-tier/modern eCooking scale-up programs. Funders and program types that recur in this space include (examples, not exhaustive): AECF, CLASP, MECS (Modern Energy Cooking Services), UNCDF, NEFCO, national Rural Electrification Agencies, multilateral development bank energy/climate windows (e.g. AIIB), and foundations such as Solar Impulse Foundation or Education Cannot Wait when their calls involve clean cooking. Treat opportunities structured this way as strong candidate matches.
-- Agriculture is generally NOT a fit: BURN is a clean cookstove company, not an agriculture company. Funding primarily for on-farm equipment, agricultural inputs, crop or livestock production, agri-processing, or farm-level energy systems is a poor fit — even if it touches climate or energy — UNLESS it specifically funds clean cookstove manufacturing or distribution.`;
+- Funding BURN typically seeks: grants, catalytic/concessional funding, results-based financing, R&D funding, and scale-up/working capital. BURN is generally NOT a fit for micro-loans or funding explicitly reserved for small/early-stage/first-time operators.`;
 
 const EXTRACTION_SYSTEM_PROMPT = `You extract structured, OPEN funding opportunities from raw web text — programs a reader could still apply to today — and assess how well each one fits BURN Manufacturing, a specific company described below. You are NOT extracting news stories about who has already won or received money.
 
@@ -69,7 +68,6 @@ Do NOT include an item in "grants" at all if the text is:
 - News reporting that a specific named company or organization has ALREADY secured, raised, received, won, been awarded, or closed a round of funding (e.g. "EcoNomad Solutions Secures £230K for..."). That is reporting someone else's past outcome, not an open call for applications.
 - A general venture capital / equity investment story, not a grant or donor program.
 - A funding round, program, or deadline that has already closed, with no indication of a new or recurring open cycle.
-- Primarily an agriculture opportunity — on-farm equipment, agricultural inputs, crop or livestock production, agri-processing, or farm-level energy systems — unless it specifically funds clean cookstove manufacturing or distribution. BURN is a clean cookstove company; general agriculture funding should be excluded entirely.
 
 Only include an item if it describes a program, fund, or call that a reader could realistically apply to — i.e. it has (or clearly implies) open applications, eligibility criteria, or a way to apply.
 
@@ -134,16 +132,21 @@ async function fetchRssCandidates(source) {
   }));
 }
 
-async function fetchHtmlCandidates(source) {
+async function fetchPageText(url) {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    await page.goto(source.url, { waitUntil: "networkidle", timeout: 30000 });
+    await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
     const text = await page.evaluate(() => document.body.innerText);
-    return [{ rawText: text.slice(0, 20000), fallbackUrl: source.url }];
+    return text.slice(0, 20000);
   } finally {
     await browser.close();
   }
+}
+
+async function fetchHtmlCandidates(source) {
+  const text = await fetchPageText(source.url);
+  return [{ rawText: text, fallbackUrl: source.url }];
 }
 
 // --- Dedup + upsert ------------------------------------------------------------
@@ -164,7 +167,7 @@ async function upsertGrant(fields, source, fallbackUrl) {
 
   const { error } = await supabase.from("grants").upsert(
     {
-      source_id: source.id,
+      source_id: source?.id ?? null,
       title: fields.title,
       funder: fields.funder,
       amount: fields.amount,
@@ -188,7 +191,7 @@ async function upsertGrant(fields, source, fallbackUrl) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// --- Main loop -------------------------------------------------------------------
+// --- Fixed-source scanning ----------------------------------------------------
 async function scanSource(sourceRow) {
   console.log(`Scanning: ${sourceRow.name} (${sourceRow.type})`);
   let candidates = [];
@@ -225,18 +228,135 @@ async function scanSource(sourceRow) {
     .eq("id", sourceRow.id);
 }
 
+// --- Google Search discovery ---------------------------------------------------
+// Runs once a day (see the hour check in main()) to stay comfortably within
+// Google's free 100-searches/day quota. Finds candidate pages beyond the
+// fixed `sources` list, then runs them through the same extraction pipeline.
+
+const SEARCH_QUERIES = [
+  "clean cooking grant application {YEAR} Africa",
+  "LPG cookstove funding opportunity call for proposals Africa",
+  "climate finance grant manufacturing Africa apply now",
+  "carbon credit results-based financing grant Africa",
+  "women gender clean energy grant fund Africa",
+  "energy transition grant {YEAR} Africa open call",
+  "deforestation GHG reduction grant fund Africa apply",
+  "clean energy scale-up capital grant East Africa",
+];
+
+const MAX_QUERIES_PER_RUN = 8;
+const RESULTS_PER_QUERY = 5;
+const RECHECK_AFTER_DAYS = 30;
+
+async function googleSearch(query) {
+  const params = new URLSearchParams({
+    key: process.env.GOOGLE_SEARCH_API_KEY,
+    cx: process.env.GOOGLE_SEARCH_CX,
+    q: query,
+    num: String(RESULTS_PER_QUERY),
+  });
+  try {
+    const res = await fetch(`https://www.googleapis.com/customsearch/v1?${params}`);
+    if (!res.ok) {
+      console.error(`  ! Google Search failed for "${query}": ${res.status} ${res.statusText}`);
+      return [];
+    }
+    const data = await res.json();
+    return (data.items || []).map((item) => ({ url: item.link, title: item.title }));
+  } catch (err) {
+    console.error(`  ! Google Search request failed for "${query}":`, err.message);
+    return [];
+  }
+}
+
+async function discoverCandidateUrls() {
+  if (!process.env.GOOGLE_SEARCH_API_KEY || !process.env.GOOGLE_SEARCH_CX) {
+    console.log("Google Search not configured (missing GOOGLE_SEARCH_API_KEY/GOOGLE_SEARCH_CX) — skipping discovery.");
+    return [];
+  }
+
+  const year = new Date().getFullYear();
+  const queries = SEARCH_QUERIES.slice(0, MAX_QUERIES_PER_RUN).map((q) => q.replace("{YEAR}", String(year)));
+
+  const seenUrls = new Set();
+  const candidates = [];
+  for (const query of queries) {
+    const results = await googleSearch(query);
+    for (const r of results) {
+      if (!r.url || seenUrls.has(r.url)) continue;
+      seenUrls.add(r.url);
+      candidates.push(r);
+    }
+    await sleep(500);
+  }
+
+  // Skip anything we've checked recently, so we don't burn Groq calls and
+  // search quota re-processing the same page every day.
+  const fresh = [];
+  for (const candidate of candidates) {
+    const { data } = await supabase
+      .from("discovered_urls")
+      .select("last_checked_at")
+      .eq("url", candidate.url)
+      .maybeSingle();
+    const staleEnough =
+      !data ||
+      Date.now() - new Date(data.last_checked_at).getTime() > RECHECK_AFTER_DAYS * 24 * 60 * 60 * 1000;
+    if (staleEnough) fresh.push(candidate);
+  }
+
+  return fresh;
+}
+
+async function scanDiscoveredUrl(candidate) {
+  console.log(`Discovered: ${candidate.url}`);
+  let rawText = "";
+  try {
+    rawText = await fetchPageText(candidate.url);
+  } catch (err) {
+    console.error(`  ! Fetch failed for discovered URL ${candidate.url}:`, err.message);
+    return;
+  }
+
+  const extracted = await extractGrants(rawText);
+  for (const fields of extracted) {
+    await upsertGrant(fields, null, candidate.url);
+  }
+
+  await supabase
+    .from("discovered_urls")
+    .upsert({ url: candidate.url, last_checked_at: new Date().toISOString() }, { onConflict: "url" });
+
+  await sleep(1500);
+}
+
+// --- Main loop -------------------------------------------------------------------
 async function main() {
   const { data: sources, error } = await supabase.from("sources").select("*").eq("active", true);
   if (error) throw error;
 
-  if (!sources || !sources.length) {
+  if (sources && sources.length) {
+    for (const source of sources) {
+      await scanSource(source);
+    }
+  } else {
     console.log("No active sources configured. Add rows to the `sources` table in Supabase.");
-    return;
   }
 
-  for (const source of sources) {
-    await scanSource(source);
+  // Only run Google Search discovery once a day (at the midnight UTC run),
+  // to stay comfortably within Google's free 100-searches/day quota.
+  const shouldDiscover = new Date().getUTCHours() === 0;
+  if (shouldDiscover) {
+    console.log("Running Google Search discovery (once-daily window)...");
+    const discovered = await discoverCandidateUrls();
+    console.log(`Found ${discovered.length} new candidate page(s) to check.`);
+    for (const candidate of discovered) {
+      await scanDiscoveredUrl(candidate);
+    }
+  } else {
+    console.log("Skipping Google Search discovery this run (only runs once/day to stay within the free quota).");
   }
+
   console.log("Done.");
 }
 

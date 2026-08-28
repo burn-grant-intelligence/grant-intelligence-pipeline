@@ -3,8 +3,8 @@
 // Grant Intelligence scraper connector.
 // Reads sources (RSS or plain HTML) from Supabase, extracts structured grant
 // fields via Groq's free-tier LLM API, and upserts results back into Supabase
-// with dedup by content hash. Once a day, also runs a small batch of Google
-// searches to discover new candidate pages beyond the fixed source list.
+// with dedup by content hash. On every run, also fires a rotating slice of
+// Google searches to discover new candidate pages beyond the fixed source list.
 //
 // Run locally:  node scripts/scan.mjs
 // Run in CI:    see .github/workflows/daily-scan.yml
@@ -232,24 +232,51 @@ async function scanSource(sourceRow) {
 }
 
 // --- Google Search discovery ---------------------------------------------------
-// Runs once a day (see the hour check in main()) to stay comfortably within
-// Google's free 100-searches/day quota. Finds candidate pages beyond the
-// fixed `sources` list, then runs them through the same extraction pipeline.
+// Runs on EVERY scan (every 2 hours, weekdays — 12 runs/day), each time using a
+// rotating slice of a 70-query pool, so the day's ~72 searches (12 runs x 6)
+// cover broad, varied ground instead of repeating the same handful of searches.
+// Stays comfortably under Google's free 100-searches/day quota with buffer to
+// spare for manual test runs.
 
-const SEARCH_QUERIES = [
-  "results-based financing clean cooking Africa call for proposals",
-  "cookstove tender request for proposals Africa {YEAR}",
-  "clean cooking Call4Solutions OR RFP Africa",
-  "institutional cooking schools Africa funding program",
-  "higher tier cooking results based financing Africa",
-  "AECF Energy Transition Challenge Fund {YEAR}",
-  "modern cooking facility Africa Nefco financing",
-  "clean cooking scale-up grant Africa {YEAR}",
+const PROGRAM_PHRASES = [
+  "results-based financing clean cooking",
+  "clean cooking call for proposals",
+  "cookstove tender request for proposals",
+  "clean cooking Call4Solutions",
+  "institutional cooking schools funding program",
+  "higher tier cooking results based financing",
+  "modern cooking facility financing",
+  "eCooking scale-up program funding",
+  "clean cooking scale-up grant",
+  "carbon credit results-based financing clean cooking",
 ];
 
-const MAX_QUERIES_PER_RUN = 8;
+const GEO_PHRASES = [
+  "Africa",
+  "East Africa",
+  "Kenya",
+  "Nigeria",
+  "Rwanda Tanzania Uganda",
+  "Sub-Saharan Africa",
+  "West Africa",
+];
+
+const QUERIES_PER_RUN = 6;
 const RESULTS_PER_QUERY = 5;
 const RECHECK_AFTER_DAYS = 30;
+
+// Builds the full 70-query pool (10 program phrases x 7 geography phrases),
+// each tagged with the current year to bias toward fresh, open calls.
+function buildQueryPool() {
+  const year = new Date().getFullYear();
+  const pool = [];
+  for (const program of PROGRAM_PHRASES) {
+    for (const geo of GEO_PHRASES) {
+      pool.push(`${program} ${geo} ${year}`);
+    }
+  }
+  return pool;
+}
 
 async function googleSearch(query) {
   const params = new URLSearchParams({
@@ -278,8 +305,13 @@ async function discoverCandidateUrls() {
     return [];
   }
 
-  const year = new Date().getFullYear();
-  const queries = SEARCH_QUERIES.slice(0, MAX_QUERIES_PER_RUN).map((q) => q.replace("{YEAR}", String(year)));
+  const pool = buildQueryPool(); // 70 queries total
+  const runIndex = Math.floor(new Date().getUTCHours() / 2); // 0-11, one slot per scheduled run
+  const start = (runIndex * QUERIES_PER_RUN) % pool.length;
+  const queries = [];
+  for (let i = 0; i < QUERIES_PER_RUN; i++) {
+    queries.push(pool[(start + i) % pool.length]);
+  }
 
   const seenUrls = new Set();
   const candidates = [];
@@ -293,8 +325,8 @@ async function discoverCandidateUrls() {
     await sleep(500);
   }
 
-  // Skip anything we've checked recently, so we don't burn Groq calls and
-  // search quota re-processing the same page every day.
+  // Skip anything we've checked recently, so we don't burn Groq calls
+  // re-processing the same page every time it resurfaces in search results.
   const fresh = [];
   for (const candidate of candidates) {
     const { data } = await supabase
@@ -346,18 +378,11 @@ async function main() {
     console.log("No active sources configured. Add rows to the `sources` table in Supabase.");
   }
 
-  // Only run Google Search discovery once a day (at the midnight UTC run),
-  // to stay comfortably within Google's free 100-searches/day quota.
-  const shouldDiscover = true;
-  if (shouldDiscover) {
-    console.log("Running Google Search discovery (once-daily window)...");
-    const discovered = await discoverCandidateUrls();
-    console.log(`Found ${discovered.length} new candidate page(s) to check.`);
-    for (const candidate of discovered) {
-      await scanDiscoveredUrl(candidate);
-    }
-  } else {
-    console.log("Skipping Google Search discovery this run (only runs once/day to stay within the free quota).");
+  console.log("Running Google Search discovery...");
+  const discovered = await discoverCandidateUrls();
+  console.log(`Found ${discovered.length} new candidate page(s) to check.`);
+  for (const candidate of discovered) {
+    await scanDiscoveredUrl(candidate);
   }
 
   console.log("Done.");

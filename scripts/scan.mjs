@@ -34,7 +34,9 @@ const BURN_PROFILE = `BURN Manufacturing — company profile for grant-fit asses
 - Carbon finance: a vertically integrated carbon project developer, 5M+ carbon credits issued, certified by Gold Standard and MMECD — strong fit for carbon finance, results-based financing, and climate-linked funding.
 - Distribution: an established last-mile distribution network across its countries of operation.
 - Gender: products and programs center women as primary household cooking-fuel decision-makers and beneficiaries.
-- Funding BURN typically seeks: grants, catalytic/concessional funding, results-based financing, R&D funding, and scale-up/working capital. BURN is generally NOT a fit for micro-loans or funding explicitly reserved for small/early-stage/first-time operators.`;
+- Funding BURN typically seeks: grants, catalytic/concessional funding, results-based financing, R&D funding, and scale-up/working capital. BURN is generally NOT a fit for micro-loans or funding explicitly reserved for small/early-stage/first-time operators.
+- Strong-fit program patterns: results-based financing (RBF) programs for clean cooking, calls for proposals / "Call4Solutions" / tenders specifically for cookstove distribution or manufacturing, institutional and school-cooking programs, and higher-tier/modern eCooking scale-up programs. Funders and program types that recur in this space include (examples, not exhaustive): AECF, CLASP, MECS (Modern Energy Cooking Services), UNCDF, NEFCO, national Rural Electrification Agencies, multilateral development bank energy/climate windows (e.g. AIIB), and foundations such as Solar Impulse Foundation or Education Cannot Wait when their calls involve clean cooking. Treat opportunities structured this way as strong candidate matches.
+- Agriculture is generally NOT a fit: BURN is a clean cookstove company, not an agriculture company. Funding primarily for on-farm equipment, agricultural inputs, crop or livestock production, agri-processing, or farm-level energy systems is a poor fit — even if it touches climate or energy — UNLESS it specifically funds clean cookstove manufacturing or distribution.`;
 
 const EXTRACTION_SYSTEM_PROMPT = `You extract structured, OPEN funding opportunities from raw web text — programs a reader could still apply to today — and assess how well each one fits BURN Manufacturing, a specific company described below. You are NOT extracting news stories about who has already won or received money.
 
@@ -68,6 +70,7 @@ Do NOT include an item in "grants" at all if the text is:
 - News reporting that a specific named company or organization has ALREADY secured, raised, received, won, been awarded, or closed a round of funding (e.g. "EcoNomad Solutions Secures £230K for..."). That is reporting someone else's past outcome, not an open call for applications.
 - A general venture capital / equity investment story, not a grant or donor program.
 - A funding round, program, or deadline that has already closed, with no indication of a new or recurring open cycle.
+- Primarily an agriculture opportunity — on-farm equipment, agricultural inputs, crop or livestock production, agri-processing, or farm-level energy systems — unless it specifically funds clean cookstove manufacturing or distribution. BURN is a clean cookstove company; general agriculture funding should be excluded entirely.
 
 Only include an item if it describes a program, fund, or call that a reader could realistically apply to — i.e. it has (or clearly implies) open applications, eligibility criteria, or a way to apply.
 
@@ -234,14 +237,14 @@ async function scanSource(sourceRow) {
 // fixed `sources` list, then runs them through the same extraction pipeline.
 
 const SEARCH_QUERIES = [
-  "clean cooking grant application {YEAR} Africa",
-  "LPG cookstove funding opportunity call for proposals Africa",
-  "climate finance grant manufacturing Africa apply now",
-  "carbon credit results-based financing grant Africa",
-  "women gender clean energy grant fund Africa",
-  "energy transition grant {YEAR} Africa open call",
-  "deforestation GHG reduction grant fund Africa apply",
-  "clean energy scale-up capital grant East Africa",
+  "results-based financing clean cooking Africa call for proposals",
+  "cookstove tender request for proposals Africa {YEAR}",
+  "clean cooking Call4Solutions OR RFP Africa",
+  "institutional cooking schools Africa funding program",
+  "higher tier cooking results based financing Africa",
+  "AECF Energy Transition Challenge Fund {YEAR}",
+  "modern cooking facility Africa Nefco financing",
+  "clean cooking scale-up grant Africa {YEAR}",
 ];
 
 const MAX_QUERIES_PER_RUN = 8;

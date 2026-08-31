@@ -78,6 +78,20 @@ export default function ApplicationTracker() {
     }
   }
 
+  async function removeItem(id: string, title: string) {
+    const confirmed = window.confirm(
+      `Remove "${title}" from your tracker? This can't be undone, but the opportunity will still be visible in the Grant Scanner if you want to re-add it later.`
+    );
+    if (!confirmed) return;
+
+    const { error: deleteError } = await supabase.from("tracker_items").delete().eq("id", id);
+    if (!deleteError) {
+      setItems((prev) => prev.filter((i) => i.id !== id));
+    } else {
+      setError(deleteError.message);
+    }
+  }
+
   async function addManualGrant() {
     if (!manualTitle.trim()) return;
     const { data: grantRow, error: grantError } = await supabase
@@ -127,7 +141,7 @@ export default function ApplicationTracker() {
         </div>
         <button
           onClick={() => setAddingManual((v) => !v)}
-          className="rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-700"
+          className="rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--accent-dark)]"
         >
           + Add grant
         </button>
@@ -180,17 +194,26 @@ export default function ApplicationTracker() {
                 <DeadlineBadge deadline={item.grant?.deadline} />
               </div>
             </div>
-            <select
-              value={item.status}
-              onChange={(e) => updateStatus(item.id, e.target.value as TrackerStatus)}
-              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
-            >
-              {TRACKER_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {STATUS_LABELS[status]}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-3">
+              <select
+                value={item.status}
+                onChange={(e) => updateStatus(item.id, e.target.value as TrackerStatus)}
+                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              >
+                {TRACKER_STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {STATUS_LABELS[status]}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => removeItem(item.id, item.grant?.title ?? "this opportunity")}
+                className="text-sm font-medium text-neutral-400 hover:text-red-600"
+                title="Remove from tracker"
+              >
+                Remove
+              </button>
+            </div>
           </div>
         ))}
       </div>
@@ -221,7 +244,7 @@ function FilterPill({
       onClick={onClick}
       className={`rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
         active
-          ? "border-orange-600 text-orange-600"
+          ? "border-[var(--accent)] text-[var(--accent)]"
           : "border-neutral-200 text-neutral-500 hover:border-neutral-300"
       }`}
     >

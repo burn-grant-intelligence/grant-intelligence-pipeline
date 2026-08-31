@@ -48,6 +48,7 @@ export interface TrackerItem {
   status: TrackerStatus;
   owner: string | null;
   notes: string | null;
+  tor_text: string | null;
   created_at: string;
   updated_at: string;
   grant: Grant | null;

@@ -105,7 +105,17 @@ export default function GrantScanner() {
     <div className="flex flex-col gap-6">
       <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
         <h2 className="mb-3 text-sm font-semibold text-[var(--ink)]">Focus areas</h2>
-        <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setActiveFocusAreas([])}
+            className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
+              activeFocusAreas.length === 0
+                ? "bg-orange-600 text-white"
+                : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+            }`}
+          >
+            All
+          </button>
           {FOCUS_AREAS.map((area) => {
             const active = activeFocusAreas.includes(area);
             return (

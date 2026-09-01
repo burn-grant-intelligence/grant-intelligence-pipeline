@@ -19,35 +19,32 @@ export default function Home() {
   return (
     <div className="flex flex-col flex-1">
       <header className="border-b border-white/40">
-        <div className="flex items-center justify-between px-6 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-3">
           <button
             onClick={() => setTab("scanner")}
-            className="-ml-3 flex items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors hover:bg-white/70 active:bg-white/90"
+            className="-ml-2 flex items-center gap-3 rounded-xl px-2 py-1 transition-colors hover:bg-white/70 active:bg-white/90"
             title="Back to dashboard"
           >
-            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-[var(--accent)] text-white">
-              🔥
-            </div>
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-[var(--accent)]">
-                Burn Manufacturing
-              </p>
-              <h1 className="font-serif text-xl font-semibold leading-tight text-[var(--ink)]">
-                Grant Intelligence
-              </h1>
-            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/burn-logo.png" alt="BURN Manufacturing" className="h-9 w-auto" />
+            <span className="h-7 w-px bg-[var(--border)]" />
+            <span className="font-serif text-lg font-semibold leading-tight text-[var(--ink)]">
+              Grant Intelligence
+            </span>
           </button>
-          <p className="hidden text-xs italic tracking-wide text-[var(--ink-muted)] sm:block">
+
+          <nav className="flex gap-2">
+            {TABS.map((t) => (
+              <TabButton key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>
+                {t.icon} {t.label}
+              </TabButton>
+            ))}
+          </nav>
+
+          <p className="hidden text-xs italic tracking-wide text-[var(--ink-muted)] lg:block">
             found · vetted · funded
           </p>
         </div>
-        <nav className="flex gap-2 px-6 pb-4">
-          {TABS.map((t) => (
-            <TabButton key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>
-              {t.icon} {t.label}
-            </TabButton>
-          ))}
-        </nav>
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
@@ -91,23 +88,10 @@ function TabButton({
       className={`relative overflow-hidden rounded-full px-4 py-2 text-sm font-medium transition-colors ${
         active
           ? "bg-white/90 text-[var(--accent)] shadow-sm"
-          : "text-[var(--ink)]/75 hover:bg-white/40"
+          : "text-[var(--ink)]/75 hover:bg-[var(--accent-2-soft)]/70"
       }`}
     >
       {children}
-      {ripples.map((r) => (
-        <span
-          key={r.id}
-          className="pointer-events-none absolute rounded-full bg-[var(--accent)]/25"
-          style={{
-            left: r.x,
-            top: r.y,
-            width: r.size,
-            height: r.size,
-            animation: "tab-ripple 0.55s ease-out",
-          }}
-        />
-      ))}
     </button>
   );
 }

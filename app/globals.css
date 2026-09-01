@@ -12,10 +12,17 @@
   /* Structure */
   --border: #e8e1e6;           /* soft, faintly warm card borders */
 
-  /* Brand accent (BURN flame orange) */
+    /* Brand accent (BURN flame orange) — primary actions, active states */
   --accent: #c2410c;
   --accent-dark: #9a3412;
   --accent-soft: #fdece1;
+
+  /* Secondary accent (dusty mauve, lifted from the sunset's mid-tone) —
+     for hover states and secondary tags, so the UI ties back to the
+     background instead of falling back to plain gray */
+  --accent-2: #8b5d7a;
+  --accent-2-soft: #f4e9f0;
+
 }
 
 @theme inline {

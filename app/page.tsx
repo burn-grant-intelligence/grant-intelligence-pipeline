@@ -7,45 +7,47 @@ import DraftApplication from "@/components/DraftApplication";
 
 type Tab = "scanner" | "tracker" | "draft";
 
+const TABS: { id: Tab; label: string; icon: string }[] = [
+  { id: "scanner", label: "Discover", icon: "🔍" },
+  { id: "tracker", label: "Pipeline", icon: "📋" },
+  { id: "draft", label: "Draft", icon: "✍️" },
+];
+
 export default function Home() {
   const [tab, setTab] = useState<Tab>("scanner");
 
   return (
     <div className="flex flex-col flex-1">
-      <header className="border-b border-[var(--border)] bg-white/90 backdrop-blur-sm">
+      <header className="border-b border-white/40">
         <div className="flex items-center justify-between px-6 py-4">
           <button
             onClick={() => setTab("scanner")}
-            className="flex items-center gap-3 text-left transition-opacity hover:opacity-80"
+            className="-ml-3 flex items-center gap-3 rounded-xl px-3 py-2 text-left transition-colors hover:bg-white/70 active:bg-white/90"
             title="Back to dashboard"
           >
             <div className="flex h-9 w-9 items-center justify-center rounded-md bg-[var(--accent)] text-white">
               🔥
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--accent)]">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-[var(--accent)]">
                 Burn Manufacturing
               </p>
-              <h1 className="font-serif text-lg font-semibold leading-tight text-[var(--ink)]">
+              <h1 className="font-serif text-xl font-semibold leading-tight text-[var(--ink)]">
                 Grant Intelligence
               </h1>
             </div>
           </button>
-          <p className="hidden text-xs text-[var(--ink-muted)] sm:block">
-            Funding discovery &amp; pipeline tracking
+          <p className="hidden text-xs italic tracking-wide text-[var(--ink-muted)] sm:block">
+            found · vetted · funded
           </p>
         </div>
-        <div className="flex gap-1 px-6">
-          <TabButton active={tab === "scanner"} onClick={() => setTab("scanner")}>
-            🔍 Grant Scanner
-          </TabButton>
-          <TabButton active={tab === "tracker"} onClick={() => setTab("tracker")}>
-            📋 Application Tracker
-          </TabButton>
-          <TabButton active={tab === "draft"} onClick={() => setTab("draft")}>
-            ✍️ Draft Application
-          </TabButton>
-        </div>
+        <nav className="flex gap-2 px-6 pb-4">
+          {TABS.map((t) => (
+            <TabButton key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>
+              {t.icon} {t.label}
+            </TabButton>
+          ))}
+        </nav>
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
@@ -86,10 +88,10 @@ function TabButton({
   return (
     <button
       onClick={handleClick}
-      className={`relative overflow-hidden border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
+      className={`relative overflow-hidden rounded-full px-4 py-2 text-sm font-medium transition-colors ${
         active
-          ? "border-[var(--accent)] text-[var(--accent)]"
-          : "border-transparent text-[var(--ink-muted)] hover:text-[var(--ink)]"
+          ? "bg-white/90 text-[var(--accent)] shadow-sm"
+          : "text-[var(--ink)]/75 hover:bg-white/40"
       }`}
     >
       {children}

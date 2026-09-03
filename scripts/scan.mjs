@@ -4,7 +4,8 @@
 // Reads sources (RSS or plain HTML) from Supabase, extracts structured grant
 // fields via Groq's free-tier LLM API, and upserts results back into Supabase
 // with dedup by content hash. On every run, also fires a rotating slice of
-// Google searches to discover new candidate pages beyond the fixed source list.
+// Google searches to discover new candidate pages beyond the fixed source list,
+// and drains any URLs queued by the Crawl4AI discovery step.
 //
 // Run locally:  node scripts/scan.mjs
 // Run in CI:    see .github/workflows/daily-scan.yml
@@ -18,6 +19,7 @@ import { supabaseAdmin as supabase } from "./supabaseAdmin.mjs";
 if (!process.env.GROQ_API_KEY) {
   throw new Error("Missing GROQ_API_KEY. Get a free key at console.groq.com and set it as an env var.");
 }
+
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // If this model name ever 404s, check console.groq.com/docs/models for the current
@@ -72,6 +74,7 @@ Do NOT include an item in "grants" at all if the text is:
 - A funding round, program, or deadline that has already closed, with no indication of a new or recurring open cycle.
 - Primarily an agriculture opportunity — on-farm equipment, agricultural inputs, crop or livestock production, agri-processing, or farm-level energy systems — unless it specifically funds clean cookstove manufacturing or distribution. BURN is a clean cookstove company; general agriculture funding should be excluded entirely.
 - A general press release, media article, or news coverage that reports on, promotes, or summarizes an organization, partnership, program, or event — even one that mentions funding, grants, or dollar amounts — UNLESS the same text also contains the actual application mechanics (clear eligibility criteria, how to apply, and either a specific deadline or a "rolling basis" statement). News describing that a program or partnership exists is not the same as that program's own open call for applications.
+
 Only include an item if it describes a program, fund, or call that a reader could realistically apply to — i.e. it has (or clearly implies) open applications, eligibility criteria, or a way to apply.
 
 If the text describes no open funding opportunity at all, respond with exactly: { "grants": [] }`;
@@ -125,6 +128,7 @@ async function extractGrants(rawText) {
 }
 
 // --- Fetchers ----------------------------------------------------------------
+
 const rssParser = new Parser();
 
 async function fetchRssCandidates(source) {
@@ -153,6 +157,7 @@ async function fetchHtmlCandidates(source) {
 }
 
 // --- Dedup + upsert ------------------------------------------------------------
+
 function hashOf(title, url) {
   return crypto.createHash("sha256").update(`${title}::${url || ""}`.toLowerCase()).digest("hex");
 }
@@ -195,8 +200,10 @@ async function upsertGrant(fields, source, fallbackUrl) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // --- Fixed-source scanning ----------------------------------------------------
+
 async function scanSource(sourceRow) {
   console.log(`Scanning: ${sourceRow.name} (${sourceRow.type})`);
+
   let candidates = [];
   try {
     candidates =
@@ -285,6 +292,7 @@ async function googleSearch(query) {
     q: query,
     num: String(RESULTS_PER_QUERY),
   });
+
   try {
     const res = await fetch(`https://www.googleapis.com/customsearch/v1?${params}`);
     if (!res.ok) {
@@ -308,6 +316,7 @@ async function discoverCandidateUrls() {
   const pool = buildQueryPool(); // 70 queries total
   const runIndex = Math.floor(new Date().getUTCHours() / 2); // 0-11, one slot per scheduled run
   const start = (runIndex * QUERIES_PER_RUN) % pool.length;
+
   const queries = [];
   for (let i = 0; i < QUERIES_PER_RUN; i++) {
     queries.push(pool[(start + i) % pool.length]);
@@ -334,9 +343,11 @@ async function discoverCandidateUrls() {
       .select("last_checked_at")
       .eq("url", candidate.url)
       .maybeSingle();
+
     const staleEnough =
       !data ||
       Date.now() - new Date(data.last_checked_at).getTime() > RECHECK_AFTER_DAYS * 24 * 60 * 60 * 1000;
+
     if (staleEnough) fresh.push(candidate);
   }
 
@@ -345,6 +356,7 @@ async function discoverCandidateUrls() {
 
 async function scanDiscoveredUrl(candidate) {
   console.log(`Discovered: ${candidate.url}`);
+
   let rawText = "";
   try {
     rawText = await fetchPageText(candidate.url);
@@ -365,7 +377,59 @@ async function scanDiscoveredUrl(candidate) {
   await sleep(1500);
 }
 
+// --- Crawl queue ----------------------------------------------------------------
+// scripts/crawl_discover.py walks funder sites with Crawl4AI and drops any page
+// that reads like a real open call into the `crawl_queue` table. This drains a
+// batch of those on each scan run, so crawl-found pages go through exactly the
+// same Groq extraction and fit analysis as everything else.
+
+const CRAWL_QUEUE_BATCH = 12;
+
+async function fetchCrawlQueue() {
+  const { data, error } = await supabase
+    .from("crawl_queue")
+    .select("url")
+    .eq("status", "pending")
+    .order("discovered_at", { ascending: true })
+    .limit(CRAWL_QUEUE_BATCH);
+
+  if (error) {
+    console.error("  ! Failed to read crawl_queue:", error.message);
+    return [];
+  }
+  return data || [];
+}
+
+async function scanQueuedUrl(row) {
+  console.log(`Crawl-queued: ${row.url}`);
+
+  let rawText = "";
+  try {
+    rawText = await fetchPageText(row.url);
+  } catch (err) {
+    console.error(`  ! Fetch failed for queued URL ${row.url}:`, err.message);
+    await supabase
+      .from("crawl_queue")
+      .update({ status: "failed", processed_at: new Date().toISOString() })
+      .eq("url", row.url);
+    return;
+  }
+
+  const extracted = await extractGrants(rawText);
+  for (const fields of extracted) {
+    await upsertGrant(fields, null, row.url);
+  }
+
+  await supabase
+    .from("crawl_queue")
+    .update({ status: "processed", processed_at: new Date().toISOString() })
+    .eq("url", row.url);
+
+  await sleep(1500);
+}
+
 // --- Main loop -------------------------------------------------------------------
+
 async function main() {
   const { data: sources, error } = await supabase.from("sources").select("*").eq("active", true);
   if (error) throw error;
@@ -383,6 +447,13 @@ async function main() {
   console.log(`Found ${discovered.length} new candidate page(s) to check.`);
   for (const candidate of discovered) {
     await scanDiscoveredUrl(candidate);
+  }
+
+  console.log("Processing crawl-discovered URLs...");
+  const queued = await fetchCrawlQueue();
+  console.log(`${queued.length} crawl-queued URL(s) to check.`);
+  for (const row of queued) {
+    await scanQueuedUrl(row);
   }
 
   console.log("Done.");

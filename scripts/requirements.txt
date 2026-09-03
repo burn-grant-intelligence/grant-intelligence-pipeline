@@ -1,0 +1,4 @@
+# Python dependencies for scripts/crawl_discover.py (the crawl-based discovery step).
+# The Node scraper (scripts/scan.mjs) is unaffected by these.
+crawl4ai==0.9.3
+requests==2.32.3

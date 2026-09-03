@@ -69,7 +69,7 @@ export default function DraftApplication() {
               </p>
               <p className="text-xs text-[var(--ink-muted)]">Status: {item.status}</p>
             </div>
-            
+              <a  
               href={buildClaudeLink(item)}
               target="_blank"
               rel="noopener noreferrer"

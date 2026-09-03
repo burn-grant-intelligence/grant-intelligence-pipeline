@@ -6,7 +6,7 @@ import { TrackerItem } from "@/lib/types";
 
 // TODO: paste your BURN Grant Applications project's URL from claude.ai here
 // (open the project on claude.ai and copy the address bar).
-const CLAUDE_PROJECT_URL = "https://claude.ai/project/PASTE_YOUR_PROJECT_ID_HERE";
+const CLAUDE_PROJECT_URL = "https://claude.ai/project/01a065f7-7c14-7799-8687-b60d821dd698";
 
 export default function DraftApplication() {
   const [items, setItems] = useState<TrackerItem[]>([]);
@@ -121,7 +121,7 @@ function buildPrompt(item: TrackerItem): string {
     "3. Finally, list every [NEEDS INPUT] marker as a checklist of what the team must still supply.",
   ].join("\n");
 }
+  function buildClaudeLink(item: TrackerItem): string {
+   return `${CLAUDE_PROJECT_URL}?q=${encodeURIComponent(buildPrompt(item))}`;
 
-function buildClaudeLink(item: TrackerItem): string {
-  return `${CLAUDE_PROJECT_URL}?q=${encodeURIComponent(buildPrompt(item))}`;
-}
+ }

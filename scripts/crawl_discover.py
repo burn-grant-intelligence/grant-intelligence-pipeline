@@ -32,22 +32,17 @@ from crawl4ai.deep_crawling.scorers import KeywordRelevanceScorer
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 
-# Funder sites worth walking. Add to this list as you find new ones — each entry
-# is a starting page, and the crawler follows links from there within the same site.
-SEED_SITES = [
-    "https://cleancooking.org/funding-opportunities/",
-    "https://www.aecfafrica.org/opportunities/",
-    "https://www.get-invest.eu/funding-database/",
-    "https://www.energy-base.org/funding/",
-    "https://www.africa-energy-portal.org/funding-opportunities",
-    "https://www.climateinvestmentfunds.org/calls-for-proposals",
-    "https://www.gcfund.org/projects/access-funding",
-    "https://www.usaid.gov/partner-with-us/work-with-usaid/find-a-funding-opportunity",
-]
+# Extra sites to walk beyond whatever is in the `sources` table — useful for a
+# site you want crawled but haven't (or won't) register as a formal scan source.
+# Usually this should just be empty; add rows to `sources` in Supabase instead,
+# since that keeps one single list that both the scanner and the crawler read.
+EXTRA_SITES = []
 
-# How many sites to walk per run, and how deep. Kept small so a run finishes in a
-# few minutes and doesn't burn through GitHub Actions minutes.
-SITES_PER_RUN = 3
+# How deep to follow links per site, and how many pages to visit before
+# stopping. Based on a real test run (57 pages across 3 sites in 28 seconds),
+# there's plenty of headroom here — these caps exist to keep any one
+# unusually large site from eating the whole run, not because of a real
+# time constraint.
 MAX_DEPTH = 2
 MAX_PAGES_PER_SITE = 25
 
@@ -82,15 +77,44 @@ APPLY_SIGNALS = [
     "application process", "call for", "request for",
 ]
 
+# A handful of the sources we crawl are broad, multi-sector development-bank
+# procurement portals (World Bank, AfDB, EBRD, EIB, UNGM, UNDP...) that publish
+# tenders for everything from IT systems to road construction, not just clean
+# cooking / energy. Without a topic check, those sites would flood the queue
+# with real-but-irrelevant tenders. So a page only qualifies if it *also*
+# mentions something in BURN's actual space.
+TOPIC_SIGNALS = [
+    "cooking", "cookstove", "cook stove", "stove", "biomass", "lpg",
+    "clean energy", "renewable energy", "energy access", "off-grid",
+    "off grid", "mini-grid", "mini grid", "solar", "sustainable energy",
+    "energy efficiency", "electrification", "carbon credit", "carbon market",
+    "climate finance", "climate change", "emissions", "sdg7", "sdg 7",
+    "clean cooking", "household energy", "fuel efficient",
+]
 
-def pick_sites_for_this_run() -> list[str]:
-    """Rotate through SEED_SITES so every site gets walked every few days."""
-    day = datetime.now(timezone.utc).timetuple().tm_yday
-    start = (day * SITES_PER_RUN) % len(SEED_SITES)
-    picked = []
-    for offset in range(SITES_PER_RUN):
-        picked.append(SEED_SITES[(start + offset) % len(SEED_SITES)])
-    return picked
+
+def fetch_active_sites() -> list[str]:
+    """Pull every active source's URL from the same `sources` table the regular
+    scanner reads, so the crawler automatically covers whatever you've already
+    added to the app — no separate list to keep in sync."""
+    try:
+        response = requests.get(
+            f"{SUPABASE_URL}/rest/v1/sources",
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            },
+            params={"select": "url", "active": "eq.true"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        urls = [row["url"] for row in response.json() if row.get("url")]
+    except Exception as err:
+        print(f"! Failed to fetch sources from Supabase: {err}")
+        urls = []
+
+    combined = list(dict.fromkeys(urls + EXTRA_SITES))  # de-dupe, keep order
+    return combined
 
 
 def looks_like_open_call(text: str) -> bool:
@@ -103,7 +127,8 @@ def looks_like_open_call(text: str) -> bool:
     has_timing = any(signal in lowered for signal in TIMING_SIGNALS)
     has_eligibility = any(signal in lowered for signal in ELIGIBILITY_SIGNALS)
     has_apply = any(signal in lowered for signal in APPLY_SIGNALS)
-    return has_timing and (has_eligibility or has_apply)
+    has_topic = any(signal in lowered for signal in TOPIC_SIGNALS)
+    return has_timing and (has_eligibility or has_apply) and has_topic
 
 
 def queue_urls(rows: list[dict]) -> int:
@@ -175,8 +200,11 @@ async def crawl_site(crawler: AsyncWebCrawler, seed_url: str) -> list[dict]:
 
 
 async def main() -> None:
-    sites = pick_sites_for_this_run()
+    sites = fetch_active_sites()
     print(f"Crawl discovery — {len(sites)} site(s) this run")
+    if not sites:
+        print("No active sites found (sources table empty, or the request failed). Nothing to do.")
+        return
 
     browser_config = BrowserConfig(headless=True, verbose=False)
     all_hits: list[dict] = []

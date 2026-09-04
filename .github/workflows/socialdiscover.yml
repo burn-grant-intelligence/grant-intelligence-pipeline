@@ -1,0 +1,35 @@
+name: Social discovery
+
+# Checks funder LinkedIn company pages (the `social_sources` table) for posts
+# that look like open tenders / calls for proposals, via Bright Data, and
+# queues the linked opportunity pages for the main scan to pick up.
+#
+# Runs twice a week rather than daily on purpose: Bright Data bills per record,
+# and funders don't post tenders hourly. Bump the cron if that proves too slow.
+
+on:
+  schedule:
+    - cron: '30 5 * * 1,4' # 05:30 UTC, Mondays and Thursdays
+  workflow_dispatch: {} # lets you trigger a run manually from the Actions tab
+
+jobs:
+  social:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests==2.32.3
+
+      - name: Run social discovery
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BRIGHTDATA_API_KEY: ${{ secrets.BRIGHTDATA_API_KEY }}
+        run: python scripts/social_discover.py

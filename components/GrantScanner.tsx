@@ -26,7 +26,7 @@ export default function GrantScanner() {
   const [geography, setGeography] = useState(GEOGRAPHY_OPTIONS[0]);
   const [trackedIds, setTrackedIds] = useState<Set<string>>(new Set());
   const [expandedId, setExpandedId] = useState<string | null>(null);
-
+  const [discardingId, setDiscardingId] = useState<string | null>(null);
   useEffect(() => {
     loadData();
   }, []);
@@ -66,8 +66,16 @@ export default function GrantScanner() {
     return s.toLowerCase().replace(/[^a-z0-9]/g, "");
   }
 
+   // Reads the `discarded` column without requiring it in the Grant type, so
+  // this still compiles (and the page still loads) whether or not the column
+  // has been added in Supabase yet.
+  function isDiscarded(grant: Grant) {
+    return (grant as Grant & { discarded?: boolean }).discarded === true;
+  }
+
   const filteredGrants = useMemo(() => {
     return grants.filter((g) => {
+      if (isDiscarded(g)) return false;
       if (activeFocusAreas.length > 0) {
         const overlap = g.focus_areas?.some((a) =>
           activeFocusAreas.some((active) => normalizeTag(a) === normalizeTag(active))
@@ -92,7 +100,25 @@ export default function GrantScanner() {
       setTrackedIds((prev) => new Set(prev).add(grant.id));
     }
   }
+  async function discardGrant(grant: Grant) {
+    if (!window.confirm(`Discard "${grant.title}"? It will stop showing up in this list.`)) return;
 
+    setDiscardingId(grant.id);
+    const previous = grants;
+    // Hide it straight away, then put it back if the save fails.
+    setGrants((prev) => prev.filter((g) => g.id !== grant.id));
+
+    const { error: discardError } = await supabase
+      .from("grants")
+      .update({ discarded: true, discarded_at: new Date().toISOString() })
+      .eq("id", grant.id);
+
+    if (discardError) {
+      setGrants(previous);
+      setError(discardError.message);
+    }
+    setDiscardingId(null);
+  }
   function isNew(grant: Grant) {
     if (!grant.first_seen_at) return false;
     const seenAt = new Date(grant.first_seen_at).getTime();
@@ -218,11 +244,23 @@ export default function GrantScanner() {
                       New
                     </span>
                   )}
-                  {grant.relevance_score != null && (
+                                    {grant.relevance_score != null && (
                     <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-xs font-medium text-[var(--accent-dark)]">
                       {Math.round(grant.relevance_score)}% match
                     </span>
                   )}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      discardGrant(grant);
+                    }}
+                    disabled={discardingId === grant.id}
+                    title="Discard this opportunity"
+                    aria-label="Discard this opportunity"
+                    className="flex h-6 w-6 items-center justify-center rounded-full text-base leading-none text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 disabled:opacity-40"
+                  >
+                    ×
+                  </button>
                 </div>
               </div>
 

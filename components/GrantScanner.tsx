@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { createElement, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { FOCUS_AREAS, Grant } from "@/lib/types";
 
@@ -236,18 +236,18 @@ export default function GrantScanner() {
               <p className="line-clamp-3 text-sm text-neutral-600">{grant.description}</p>
             )}
             <div className="mt-2 flex items-center justify-between">
-              {grant.application_url ? (
-                
-                  href={grant.application_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm font-medium text-orange-600 hover:underline"
-                >
-                  View source →
-                </a>
-              ) : (
-                <span />
-              )}
+              {grant.application_url
+                ? createElement(
+                    "a",
+                    {
+                      href: grant.application_url,
+                      target: "_blank",
+                      rel: "noopener noreferrer",
+                      className: "text-sm font-medium text-orange-600 hover:underline",
+                    },
+                    "View source →"
+                  )
+                : <span />}
               <button
                 onClick={() => trackGrant(grant)}
                 disabled={trackedIds.has(grant.id)}

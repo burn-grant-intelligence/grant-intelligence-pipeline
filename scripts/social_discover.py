@@ -509,12 +509,16 @@ def content_hash(title: str, url: str) -> str:
 
 def save_grant(fields: dict, post: dict) -> bool:
     """Upsert one extracted opportunity into `grants`, flagged as LinkedIn-sourced
-    and priority so it sorts to the top of the Grant Scanner."""
-    application_url = (
-        fields.get("application_url")
-        or (post["post_links"][0] if post["post_links"] else None)
-        or post["post_url"]
-    )
+    and priority so it sorts to the top of the Grant Scanner.
+
+    application_url always points back to the LinkedIn post itself, not the
+    link or email Groq pulled out of the post text — those are often a
+    mailto: address (as with the MECS carbon finance post) or a login-walled
+    procurement portal, which makes for a broken or unhelpful "Go to
+    opportunity" click. The LinkedIn post always loads and shows full context,
+    including how to apply, so that's what the button should point to.
+    """
+    application_url = post["post_url"]
     title = str(fields.get("title") or "").strip()
     if not title:
         return False

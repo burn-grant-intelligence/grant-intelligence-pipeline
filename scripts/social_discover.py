@@ -69,16 +69,18 @@ SOLICITATION_SIGNALS = [
     "request for proposal", "request for proposals", "rfp", "rfq",
     "request for quotation", "request for application", "rfa",
     "expression of interest", "expressions of interest", "eoi",
-    "call for proposal", "call for proposals", "call for application",
-    "call for applications", "call for solutions", "call for innovation",
-    "call for innovations", "call for expression", "call for tender",
-    "call for tenders", "invitation to tender", "invitation to bid",
-    "invitation for bids", "new tender", "open tender", "tender notice",
+    "call for",  # catches "call for proposals/tenders/business plans/partners/..."
+                 # in one go, instead of enumerating every noun that follows it
+    "invitation to tender", "invitation to bid", "invitation for bids",
+    "invitation to apply", "invites applications",
+    "invites organisations to apply", "invites organizations to apply",
+    "new tender", "open tender", "tender notice",
     "terms of reference", "prequalification", "pre-qualification",
     "procurement notice", "challenge fund", "funding call",
     "applications are open", "applications are now open", "now accepting applications",
-    "call for consultants", "consultancy opportunity", "seeking a consultant",
-    "seeking consultants", "seeking proposals", "seeking applications",
+    "consultancy opportunity", "seeking a consultant", "seeking consultants",
+    "seeking proposals", "seeking applications",
+    "seeking partners", "seeking implementing partners",
 ]
 
 # ...and it has to be time-bound: a real, currently-open window.

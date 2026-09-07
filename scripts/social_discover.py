@@ -58,6 +58,9 @@ MAX_AGE_DAYS = 45
 POLL_INTERVAL_SECONDS = 15
 POLL_MAX_ATTEMPTS = 20
 
+GROQ_MAX_RETRIES = 3
+GROQ_RETRY_BACKOFF_SECONDS = 20  # fallback wait if Groq doesn't send a Retry-After header
+
 # --- What counts as an opportunity ----------------------------------------
 # Deliberately narrow: only real solicitations. Loose words like "funding" or
 # "grant" on their own are NOT enough — a funder saying "we granted $2m to X"
@@ -447,28 +450,42 @@ def extract_opportunity(post: dict) -> dict | None:
         f"Links in the post: {', '.join(post['post_links'])}" if post["post_links"] else "",
     ]))
 
-    try:
-        response = requests.post(
-            GROQ_URL,
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": GROQ_MODEL,
-                "reasoning_effort": "low",
-                "max_completion_tokens": 3072,
-                "messages": [
-                    {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
-                    {"role": "user", "content": body[:15000]},
-                ],
-            },
-            timeout=120,
-        )
-        response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
-    except Exception as err:
-        print(f"    ! Groq request failed: {err}")
+    content = None
+    for attempt in range(GROQ_MAX_RETRIES):
+        try:
+            response = requests.post(
+                GROQ_URL,
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": GROQ_MODEL,
+                    "reasoning_effort": "low",
+                    "max_completion_tokens": 3072,
+                    "messages": [
+                        {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+                        {"role": "user", "content": body[:15000]},
+                    ],
+                },
+                timeout=120,
+            )
+            if response.status_code == 429:
+                wait = int(response.headers.get("retry-after", GROQ_RETRY_BACKOFF_SECONDS))
+                if attempt < GROQ_MAX_RETRIES - 1:
+                    print(f"    ! Groq rate-limited (429); waiting {wait}s and retrying "
+                          f"({attempt + 1}/{GROQ_MAX_RETRIES})")
+                    time.sleep(wait)
+                    continue
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"]
+            break
+        except Exception as err:
+            print(f"    ! Groq request failed: {err}")
+            return None
+
+    if content is None:
+        print("    ! Groq rate-limited after retries; skipping this post")
         return None
 
     try:
@@ -481,7 +498,7 @@ def extract_opportunity(post: dict) -> dict | None:
     if not grants or not isinstance(grants, list):
         return None
     fields = grants[0]
-    return fields if isinstance(fields, dict) and fields.get("title") else None
+    return fields if isinstance(fields, dict) and fields.get("title") else None 
 
 
 def content_hash(title: str, url: str) -> str:

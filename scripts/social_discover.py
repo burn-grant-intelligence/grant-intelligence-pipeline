@@ -52,7 +52,7 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "openai/gpt-oss-20b"
 
 # --- Cost / noise controls -------------------------------------------------
-POSTS_PER_COMPANY = 10
+POSTS_PER_COMPANY = 5
 MAX_AGE_DAYS = 45
 
 POLL_INTERVAL_SECONDS = 15

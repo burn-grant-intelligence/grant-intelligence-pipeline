@@ -636,9 +636,9 @@ def main() -> None:
 
     already = seen_post_urls([row["post_url"] for row in candidates])
     fresh = [row for row in candidates if row["post_url"] not in already]
-    print(f"\n{len(fresh)} new post(s) to extract ({len(candidates) - len(fresh)} seen before)")
-
-      saved = 0
+    print(f"\n{len(fresh)} new post(s) to extract ({len(candidates) - len(fresh)} seen before)")  
+    saved = 0
+    
     to_log = []
     for post in fresh:
         print(f"  → {(post.get('headline') or post['post_url'])[:70]}")

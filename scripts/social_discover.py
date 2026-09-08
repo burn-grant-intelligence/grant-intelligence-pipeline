@@ -182,7 +182,7 @@ Return {{ "grants": [] }} — i.e. extract nothing — if the post is:
 - A job vacancy for an individual employee (a staff role), rather than a tender, consultancy assignment or funding call open to organisations.
 - An opportunity whose stated deadline has clearly already passed.
 - Primarily an agriculture, forestry or land-use opportunity — farming, crops, livestock, irrigation, agri-processing, agroforestry, reforestation/afforestation, tree planting, REDD+, land restoration, biodiversity or conservation — even where climate or energy is mentioned. BURN's scope is clean cooking, cookstoves, clean energy and energy transition, and carbon markets. An efficient-cookstove programme that cites reduced deforestation as a co-benefit IS in scope; a forestry or land-restoration programme is not.
-
+- Advertising a paid course, training programme, certification, workshop, webinar or masterclass that BURN would pay a fee to attend as a participant — not a grant, tender or funding opportunity that provides money or a contract TO BURN.
 Otherwise extract exactly one item describing the opportunity."""
 
 

@@ -650,12 +650,19 @@ def main() -> None:
         print("\nDone. No new solicitations found.")
         return
 
-    already = seen_post_urls([row["post_url"] for row in candidates])
-    fresh = [row for row in candidates if row["post_url"] not in already]
-    print(f"\n{len(fresh)} new post(s) to extract ({len(candidates) - len(fresh)} seen before)")
+    # Dedup check deliberately removed: every candidate is reprocessed every
+    # run, even if seen before. save_grant() upserts on a content hash of
+    # title + link, so a repeat post just refreshes the same tracker row
+    # (last_seen_at, etc.) rather than creating a duplicate — so nothing
+    # already fixed here shows up twice, it just costs an extra Groq call.
+    fresh = candidates
+    print(f"\n{len(fresh)} post(s) to extract (dedup disabled — every candidate is reprocessed each run)")
 
+    # Logged one post at a time, right after it's processed — not batched to
+    # the end — so a mid-run timeout (the workflow's 30-minute ceiling) only
+    # loses whatever hadn't been reached yet, never work already done.
     saved = 0
-    to_log = []
+    logged = 0
     for post in fresh:
         print(f"  → {(post.get('headline') or post['post_url'])[:70]}")
         fields = extract_opportunity(post)
@@ -666,9 +673,8 @@ def main() -> None:
             print("    - nothing extractable; skipped")
         elif save_grant(fields, post):
             saved += 1
-        to_log.append(post)
+        logged += log_posts([post])
 
-    logged = log_posts(to_log)
     print(f"\nDone. {saved} opportunity/ies added to the Grant Scanner, {logged} post(s) logged.")
 
 

@@ -52,7 +52,7 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "openai/gpt-oss-20b"
 
 # --- Cost / noise controls -------------------------------------------------
-POSTS_PER_COMPANY = 5
+POSTS_PER_COMPANY = 8
 MAX_AGE_DAYS = 45
 
 POLL_INTERVAL_SECONDS = 15
@@ -134,6 +134,7 @@ TRAINING_SIGNALS = [
     "webinar registration", "register for this webinar", "register for the webinar",
     "cpd points", "cpd credits", "online course",
 ]
+
 BURN_PROFILE = """BURN Manufacturing — company profile for grant-fit assessment:
 - Products: manufactures and distributes clean cookstoves across every major fuel type — LPG gas, biomass/wood, electric induction (IoT-enabled), ethanol, charcoal, and institutional-scale stoves — plus cookware.
 - Manufacturing & scale: owns factories in Kenya and Nigeria (plus Asia), 450K+ units/month capacity, ships orders from 3,000 to 1M+ units. This is an established, at-scale manufacturer — NOT an early-stage or pre-revenue startup.
@@ -176,13 +177,16 @@ Rules for "fit_analysis":
 - If something looks like a MISMATCH, say so plainly — e.g. it targets operators far smaller than BURN's scale, the geography excludes BURN's countries, it is an equity investment rather than a grant, or it is a consultancy/advisory assignment rather than funding for BURN's own operations.
 - If the post gives too little detail to judge fit, set this field to null rather than guessing.
 
+A human reviews every opportunity you extract in the Grant Scanner before deciding whether to pursue it, and can discard anything irrelevant with one click. So when a post is a genuine, open, on-topic call for applications, extract it even if some secondary detail is thin or unclear — set the uncertain field to null and flag the uncertainty in fit_analysis — rather than returning an empty grants list. Only skip a post entirely for one of the specific reasons below.
+
 Return {{ "grants": [] }} — i.e. extract nothing — if the post is:
 - Announcing that someone has ALREADY won, received or been awarded funding.
 - A recap of an event, conference, webinar or partnership, even if funding is mentioned.
-- A job vacancy for an individual employee (a staff role), rather than a tender, consultancy assignment or funding call open to organisations.
+- A job vacancy for a permanent or fixed-term STAFF employee (e.g. "Now hiring: Program Officer," asking for a CV/résumé) — NOT a competitively tendered individual consultancy. If the post has tender/procurement mechanics (a bidding portal, a Terms of Reference, a formal submission deadline), treat it as a solicitation and extract it, even when it names a single "consultant" as the eligible bidder.
+- Advertising a paid course, training programme, certification, workshop, webinar or masterclass that BURN would pay a fee to attend as a participant — not a grant, tender or funding opportunity that provides money or a contract TO BURN.
 - An opportunity whose stated deadline has clearly already passed.
 - Primarily an agriculture, forestry or land-use opportunity — farming, crops, livestock, irrigation, agri-processing, agroforestry, reforestation/afforestation, tree planting, REDD+, land restoration, biodiversity or conservation — even where climate or energy is mentioned. BURN's scope is clean cooking, cookstoves, clean energy and energy transition, and carbon markets. An efficient-cookstove programme that cites reduced deforestation as a co-benefit IS in scope; a forestry or land-restoration programme is not.
-- Advertising a paid course, training programme, certification, workshop, webinar or masterclass that BURN would pay a fee to attend as a participant — not a grant, tender or funding opportunity that provides money or a contract TO BURN.
+
 Otherwise extract exactly one item describing the opportunity."""
 
 
@@ -262,9 +266,18 @@ def parse_records(response: requests.Response) -> list[dict]:
 
 def poll_snapshot(snapshot_id: str) -> list[dict]:
     """If the sync endpoint times out it returns a snapshot_id instead; wait for
-    that job to finish and pull the results."""
+    that job to finish and pull the results.
+
+    Bright Data's snapshot can return a PARTIAL batch of records while the job
+    status is still "running" — e.g. 1 record after the first poll, with more
+    still being collected. Returning on the very first non-empty response means
+    a page's older-but-still-fresh posts can be silently dropped, so we keep
+    polling until we have a full POSTS_PER_COMPANY batch (or run out of
+    attempts), falling back to the largest partial batch seen if we never do.
+    """
     headers = {"Authorization": f"Bearer {BRIGHTDATA_API_KEY}"}
     print(f"  … job queued ({snapshot_id}), waiting for it to finish")
+    best: list[dict] = []
 
     for attempt in range(POLL_MAX_ATTEMPTS):
         time.sleep(POLL_INTERVAL_SECONDS)
@@ -282,7 +295,7 @@ def poll_snapshot(snapshot_id: str) -> list[dict]:
 
             if status in {"failed", "error", "canceled", "cancelled"}:
                 print("  ! Bright Data reported the job failed")
-                return []
+                return best
 
             # The exact "ready" wording isn't documented reliably, so rather
             # than matching on a status string, just try the snapshot and see
@@ -295,13 +308,18 @@ def poll_snapshot(snapshot_id: str) -> list[dict]:
             )
             if snapshot.ok:
                 records = parse_records(snapshot)
-                if records:
-                    return records
+                if len(records) > len(best):
+                    best = records
+                if len(best) >= POSTS_PER_COMPANY:
+                    return best
         except Exception as err:
             print(f"    poll {attempt + 1} failed: {err}")
 
-    print("  ! gave up waiting for the job to finish")
-    return []
+    if best:
+        print(f"  ! gave up waiting for the full batch; using {len(best)} post(s) collected so far")
+    else:
+        print("  ! gave up waiting for the job to finish")
+    return best
 
 
 def fetch_company_posts(company_url: str, discover_by: str = "company_url") -> list[dict]:
@@ -524,7 +542,7 @@ def extract_opportunity(post: dict):
     if not grants or not isinstance(grants, list):
         return None
     fields = grants[0]
-    return fields if isinstance(fields, dict) and fields.get("title") else None 
+    return fields if isinstance(fields, dict) and fields.get("title") else None
 
 
 def content_hash(title: str, url: str) -> str:
@@ -539,10 +557,10 @@ def save_grant(fields: dict, post: dict) -> bool:
 
     application_url always points back to the LinkedIn post itself, not the
     link or email Groq pulled out of the post text — those are often a
-    mailto: address (as with the MECS carbon finance post) or a login-walled
-    procurement portal, which makes for a broken or unhelpful "Go to
-    opportunity" click. The LinkedIn post always loads and shows full context,
-    including how to apply, so that's what the button should point to.
+    mailto: address or a login-walled procurement portal, which makes for a
+    broken or unhelpful "Go to opportunity" click. The LinkedIn post always
+    loads and shows full context, including how to apply, so that's what the
+    button should point to.
     """
     application_url = post["post_url"]
     title = str(fields.get("title") or "").strip()
@@ -636,9 +654,9 @@ def main() -> None:
 
     already = seen_post_urls([row["post_url"] for row in candidates])
     fresh = [row for row in candidates if row["post_url"] not in already]
-    print(f"\n{len(fresh)} new post(s) to extract ({len(candidates) - len(fresh)} seen before)")  
+    print(f"\n{len(fresh)} new post(s) to extract ({len(candidates) - len(fresh)} seen before)")
+
     saved = 0
-    
     to_log = []
     for post in fresh:
         print(f"  → {(post.get('headline') or post['post_url'])[:70]}")
@@ -654,3 +672,10 @@ def main() -> None:
 
     logged = log_posts(to_log)
     print(f"\nDone. {saved} opportunity/ies added to the Grant Scanner, {logged} post(s) logged.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(1)

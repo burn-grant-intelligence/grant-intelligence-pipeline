@@ -52,7 +52,7 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "openai/gpt-oss-20b"
 
 # --- Cost / noise controls -------------------------------------------------
-POSTS_PER_COMPANY = 8
+POSTS_PER_COMPANY = 5
 MAX_AGE_DAYS = 45
 
 POLL_INTERVAL_SECONDS = 15
@@ -385,22 +385,20 @@ def post_age_days(record: dict) -> float | None:
 
 
 def is_solicitation(record: dict) -> bool:
-    """Narrow gate: a real, time-bound, on-topic call for applications."""
+    """Minimal gate: skip only posts with next to no real text (an image-only
+    post, a bare share with no caption) — Groq can't extract anything from
+    those regardless. Everything else goes to Groq, which makes the actual
+    "is this a genuine opportunity" call. No fixed keyword list can keep up
+    with how differently every funder phrases a call for applications, so
+    Groq's own judgment (tuned in EXTRACTION_SYSTEM_PROMPT to err toward
+    extracting when a post is ambiguous, and to exclude the specific cases
+    that aren't real opportunities — already-won news, event recaps, paid
+    courses, agriculture, expired deadlines) does this filtering instead."""
     text = " ".join(
         str(record.get(field) or "")
         for field in ("headline", "post_text", "title")
-    ).lower()
-    if len(text) < 120:
-        return False
-    if any(signal in text for signal in EXCLUDE_SIGNALS):
-        return False
-    if any(signal in text for signal in TRAINING_SIGNALS):
-        return False
-    return (
-        any(signal in text for signal in SOLICITATION_SIGNALS)
-        and any(signal in text for signal in TIMING_SIGNALS)
-        and any(signal in text for signal in TOPIC_SIGNALS)
-    )
+    ).strip()
+    return len(text) >= 40
 
 
 def external_links(record: dict) -> list[str]:

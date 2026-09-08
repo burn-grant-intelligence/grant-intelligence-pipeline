@@ -638,22 +638,19 @@ def main() -> None:
     fresh = [row for row in candidates if row["post_url"] not in already]
     print(f"\n{len(fresh)} new post(s) to extract ({len(candidates) - len(fresh)} seen before)")
 
-    saved = 0
+      saved = 0
+    to_log = []
     for post in fresh:
         print(f"  → {(post.get('headline') or post['post_url'])[:70]}")
         fields = extract_opportunity(post)
+        if fields is RETRY:
+            print("    - technical failure; will retry this post next run")
+            continue
         if not fields:
             print("    - nothing extractable; skipped")
-            continue
-        if save_grant(fields, post):
+        elif save_grant(fields, post):
             saved += 1
+        to_log.append(post)
 
-    logged = log_posts(fresh)
+    logged = log_posts(to_log)
     print(f"\nDone. {saved} opportunity/ies added to the Grant Scanner, {logged} post(s) logged.")
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        sys.exit(1)

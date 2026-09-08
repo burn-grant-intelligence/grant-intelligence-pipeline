@@ -456,8 +456,18 @@ def extract_json_object(text: str) -> str:
     return text[start:end + 1] if start != -1 and end > start else text
 
 
-def extract_opportunity(post: dict) -> dict | None:
-    """Run one post through Groq and get structured opportunity fields back."""
+RETRY = object()  # sentinel: a technical failure, not a real "no opportunity here" verdict
+
+
+def extract_opportunity(post: dict):
+    """Run one post through Groq and get structured opportunity fields back.
+
+    Returns a dict of fields if Groq extracted a real opportunity, None if
+    Groq evaluated the post and genuinely found nothing extractable, or the
+    RETRY sentinel if the call itself failed technically (rate limit, network
+    error, bad JSON). The caller must NOT mark a RETRY post as "seen" — it
+    should get a real second chance next run instead of being lost for good.
+    """
     body = "\n\n".join(filter(None, [
         f"Posted by: {post.get('author_name') or 'Unknown'}",
         f"Posted on: {post.get('posted_at') or 'Unknown'}",
@@ -498,17 +508,17 @@ def extract_opportunity(post: dict) -> dict | None:
             break
         except Exception as err:
             print(f"    ! Groq request failed: {err}")
-            return None
+            return RETRY
 
     if content is None:
-        print("    ! Groq rate-limited after retries; skipping this post")
-        return None
+        print("    ! Groq rate-limited after retries; will retry this post next run")
+        return RETRY
 
     try:
         parsed = json.loads(extract_json_object(content))
     except (json.JSONDecodeError, TypeError):
-        print("    ! Groq returned unparseable JSON; skipping this post")
-        return None
+        print("    ! Groq returned unparseable JSON; will retry this post next run")
+        return RETRY
 
     grants = parsed.get("grants") or []
     if not grants or not isinstance(grants, list):

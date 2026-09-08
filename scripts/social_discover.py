@@ -122,6 +122,18 @@ EXCLUDE_SIGNALS = [
     "horticulture", "poultry", "dairy",
 ]
 
+# Posts advertising a PAID course, training, certification or webinar — reuse
+# "deadline"/"apply"/"register" language but aren't a funding opportunity at
+# all; BURN would be paying to attend, not receiving money or a contract.
+TRAINING_SIGNALS = [
+    "course fee", "registration fee", "tuition fee", "training fee",
+    "workshop fee", "enroll now", "enrol now", "enrollment is open",
+    "enrolment is open", "book your seat", "reserve your seat",
+    "limited seats", "seats available", "early bird", "earlybird",
+    "certificate of completion", "certification course", "masterclass",
+    "webinar registration", "register for this webinar", "register for the webinar",
+    "cpd points", "cpd credits", "online course",
+]
 BURN_PROFILE = """BURN Manufacturing — company profile for grant-fit assessment:
 - Products: manufactures and distributes clean cookstoves across every major fuel type — LPG gas, biomass/wood, electric induction (IoT-enabled), ethanol, charcoal, and institutional-scale stoves — plus cookware.
 - Manufacturing & scale: owns factories in Kenya and Nigeria (plus Asia), 450K+ units/month capacity, ships orders from 3,000 to 1M+ units. This is an established, at-scale manufacturer — NOT an early-stage or pre-revenue startup.
@@ -363,6 +375,8 @@ def is_solicitation(record: dict) -> bool:
     if len(text) < 120:
         return False
     if any(signal in text for signal in EXCLUDE_SIGNALS):
+        return False
+    if any(signal in text for signal in TRAINING_SIGNALS):
         return False
     return (
         any(signal in text for signal in SOLICITATION_SIGNALS)

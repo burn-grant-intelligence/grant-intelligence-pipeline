@@ -60,6 +60,8 @@ POLL_MAX_ATTEMPTS = 20
 
 GROQ_MAX_RETRIES = 3
 GROQ_RETRY_BACKOFF_SECONDS = 20  # fallback wait if Groq doesn't send a Retry-After header
+GROQ_PACING_SECONDS = 2.5  # deliberate pause between calls, to stay under Groq's 30 req/min limit
+                           # proactively instead of reacting to 429s after the fact
 
 # --- What counts as an opportunity ----------------------------------------
 # Deliberately narrow: only real solicitations. Loose words like "funding" or
@@ -650,17 +652,23 @@ def main() -> None:
         print("\nDone. No new solicitations found.")
         return
 
-    # Dedup check deliberately removed: every candidate is reprocessed every
-    # run, even if seen before. save_grant() upserts on a content hash of
-    # title + link, so a repeat post just refreshes the same tracker row
-    # (last_seen_at, etc.) rather than creating a duplicate — so nothing
-    # already fixed here shows up twice, it just costs an extra Groq call.
-    fresh = candidates
-    print(f"\n{len(fresh)} post(s) to extract (dedup disabled — every candidate is reprocessed each run)")
+    # Dedup is back: a post only gets skipped here once Groq has actually
+    # given it a real verdict (extracted, or genuinely excluded) — see
+    # extract_opportunity()'s RETRY sentinel below. A post that failed for a
+    # technical reason (rate limit, network error) is never marked "seen", so
+    # it's retried next run instead of being silently lost. Re-litigating
+    # posts Groq has already judged, every single run forever, was the main
+    # thing blowing up run time — this brings that back under control without
+    # reintroducing the old "lost forever on a 429" problem.
+    already = seen_post_urls([row["post_url"] for row in candidates])
+    fresh = [row for row in candidates if row["post_url"] not in already]
+    print(f"\n{len(fresh)} new post(s) to extract ({len(candidates) - len(fresh)} seen before)")
 
     # Logged one post at a time, right after it's processed — not batched to
     # the end — so a mid-run timeout (the workflow's 30-minute ceiling) only
-    # loses whatever hadn't been reached yet, never work already done.
+    # loses whatever hadn't been reached yet, never work already done. Each
+    # iteration also paces itself (GROQ_PACING_SECONDS) so a big batch of new
+    # posts doesn't sprint into Groq's rate limit and burn time on 429 retries.
     saved = 0
     logged = 0
     for post in fresh:
@@ -668,12 +676,13 @@ def main() -> None:
         fields = extract_opportunity(post)
         if fields is RETRY:
             print("    - technical failure; will retry this post next run")
-            continue
-        if not fields:
-            print("    - nothing extractable; skipped")
-        elif save_grant(fields, post):
-            saved += 1
-        logged += log_posts([post])
+        else:
+            if not fields:
+                print("    - nothing extractable; skipped")
+            elif save_grant(fields, post):
+                saved += 1
+            logged += log_posts([post])
+        time.sleep(GROQ_PACING_SECONDS)
 
     print(f"\nDone. {saved} opportunity/ies added to the Grant Scanner, {logged} post(s) logged.")
 

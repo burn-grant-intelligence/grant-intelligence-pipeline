@@ -384,20 +384,32 @@ def post_age_days(record: dict) -> float | None:
 
 
 def is_solicitation(record: dict) -> bool:
-    """Minimal gate: skip only posts with next to no real text (an image-only
-    post, a bare share with no caption) — Groq can't extract anything from
-    those regardless. Everything else goes to Groq, which makes the actual
-    "is this a genuine opportunity" call. No fixed keyword list can keep up
-    with how differently every funder phrases a call for applications, so
-    Groq's own judgment (tuned in EXTRACTION_SYSTEM_PROMPT to err toward
-    extracting when a post is ambiguous, and to exclude the specific cases
-    that aren't real opportunities — already-won news, event recaps, paid
-    courses, agriculture, expired deadlines) does this filtering instead."""
+    """Keyword gate that runs BEFORE a post reaches Groq — this is what
+    actually controls run time, since it decides how many posts get an
+    expensive Groq call at all.
+
+    Requires a SOLICITATION_SIGNALS match (RFP, EOI, "call for...", "seeking
+    partners", etc. — phrases that essentially never show up outside a genuine
+    call for applications) and rejects EXCLUDE_SIGNALS hits (agriculture,
+    livestock, etc.).
+
+    Deliberately does NOT also require a TIMING_SIGNALS and TOPIC_SIGNALS
+    match, unlike an earlier version of this gate: requiring all three at once
+    excluded real, qualified opportunities whose wording didn't happen to hit
+    one of those two fixed phrase lists (e.g. a "CALL FOR BUSINESS PLANS" post
+    with no post text matching any TIMING_SIGNALS phrase). SOLICITATION_SIGNALS
+    alone is specific enough to keep Groq's workload small; anything that gets
+    this far still has to survive Groq's own, more nuanced judgment
+    (EXTRACTION_SYSTEM_PROMPT) before it becomes a grant."""
     text = " ".join(
         str(record.get(field) or "")
         for field in ("headline", "post_text", "title")
-    ).strip()
-    return len(text) >= 40
+    ).lower()
+    if len(text) < 40:
+        return False
+    if any(signal in text for signal in EXCLUDE_SIGNALS):
+        return False
+    return any(signal in text for signal in SOLICITATION_SIGNALS)
 
 
 def external_links(record: dict) -> list[str]:

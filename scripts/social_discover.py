@@ -270,16 +270,18 @@ def poll_snapshot(snapshot_id: str) -> list[dict]:
     """If the sync endpoint times out it returns a snapshot_id instead; wait for
     that job to finish and pull the results.
 
-    Bright Data's snapshot can return a PARTIAL batch of records while the job
-    status is still "running" — e.g. 1 record after the first poll, with more
-    still being collected. Returning on the very first non-empty response means
-    a page's older-but-still-fresh posts can be silently dropped, so we keep
-    polling until we have a full POSTS_PER_COMPANY batch (or run out of
-    attempts), falling back to the largest partial batch seen if we never do.
+    Returns as soon as ANY non-empty batch comes back, even a partial one —
+    this is back to the original behavior. An earlier version of this function
+    waited for a FULL POSTS_PER_COMPANY batch before returning, up to
+    POLL_MAX_ATTEMPTS x POLL_INTERVAL_SECONDS (5 minutes) per source. That
+    caught a few older-but-still-fresh posts that this version can miss, but
+    with ~15-20 sources, a handful needing the full wait was enough on its own
+    to blow past the workflow's 30-minute ceiling — before Groq is even
+    involved. Sources are re-checked twice a week, so a post missed on one run
+    is very likely still there (or superseded by a newer one) on the next.
     """
     headers = {"Authorization": f"Bearer {BRIGHTDATA_API_KEY}"}
     print(f"  … job queued ({snapshot_id}), waiting for it to finish")
-    best: list[dict] = []
 
     for attempt in range(POLL_MAX_ATTEMPTS):
         time.sleep(POLL_INTERVAL_SECONDS)
@@ -297,7 +299,7 @@ def poll_snapshot(snapshot_id: str) -> list[dict]:
 
             if status in {"failed", "error", "canceled", "cancelled"}:
                 print("  ! Bright Data reported the job failed")
-                return best
+                return []
 
             # The exact "ready" wording isn't documented reliably, so rather
             # than matching on a status string, just try the snapshot and see
@@ -310,18 +312,13 @@ def poll_snapshot(snapshot_id: str) -> list[dict]:
             )
             if snapshot.ok:
                 records = parse_records(snapshot)
-                if len(records) > len(best):
-                    best = records
-                if len(best) >= POSTS_PER_COMPANY:
-                    return best
+                if records:
+                    return records
         except Exception as err:
             print(f"    poll {attempt + 1} failed: {err}")
 
-    if best:
-        print(f"  ! gave up waiting for the full batch; using {len(best)} post(s) collected so far")
-    else:
-        print("  ! gave up waiting for the job to finish")
-    return best
+    print("  ! gave up waiting for the job to finish")
+    return []
 
 
 def fetch_company_posts(company_url: str, discover_by: str = "company_url") -> list[dict]:

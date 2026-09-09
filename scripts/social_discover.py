@@ -60,8 +60,6 @@ POLL_MAX_ATTEMPTS = 20
 
 GROQ_MAX_RETRIES = 3
 GROQ_RETRY_BACKOFF_SECONDS = 20  # fallback wait if Groq doesn't send a Retry-After header
-GROQ_PACING_SECONDS = 2.5  # deliberate pause between calls, to stay under Groq's 30 req/min limit
-                           # proactively instead of reacting to 429s after the fact
 
 # --- What counts as an opportunity ----------------------------------------
 # Deliberately narrow: only real solicitations. Loose words like "funding" or
@@ -124,19 +122,6 @@ EXCLUDE_SIGNALS = [
     "horticulture", "poultry", "dairy",
 ]
 
-# Posts advertising a PAID course, training, certification or webinar — reuse
-# "deadline"/"apply"/"register" language but aren't a funding opportunity at
-# all; BURN would be paying to attend, not receiving money or a contract.
-TRAINING_SIGNALS = [
-    "course fee", "registration fee", "tuition fee", "training fee",
-    "workshop fee", "enroll now", "enrol now", "enrollment is open",
-    "enrolment is open", "book your seat", "reserve your seat",
-    "limited seats", "seats available", "early bird", "earlybird",
-    "certificate of completion", "certification course", "masterclass",
-    "webinar registration", "register for this webinar", "register for the webinar",
-    "cpd points", "cpd credits", "online course",
-]
-
 BURN_PROFILE = """BURN Manufacturing — company profile for grant-fit assessment:
 - Products: manufactures and distributes clean cookstoves across every major fuel type — LPG gas, biomass/wood, electric induction (IoT-enabled), ethanol, charcoal, and institutional-scale stoves — plus cookware.
 - Manufacturing & scale: owns factories in Kenya and Nigeria (plus Asia), 450K+ units/month capacity, ships orders from 3,000 to 1M+ units. This is an established, at-scale manufacturer — NOT an early-stage or pre-revenue startup.
@@ -179,13 +164,10 @@ Rules for "fit_analysis":
 - If something looks like a MISMATCH, say so plainly — e.g. it targets operators far smaller than BURN's scale, the geography excludes BURN's countries, it is an equity investment rather than a grant, or it is a consultancy/advisory assignment rather than funding for BURN's own operations.
 - If the post gives too little detail to judge fit, set this field to null rather than guessing.
 
-A human reviews every opportunity you extract in the Grant Scanner before deciding whether to pursue it, and can discard anything irrelevant with one click. So when a post is a genuine, open, on-topic call for applications, extract it even if some secondary detail is thin or unclear — set the uncertain field to null and flag the uncertainty in fit_analysis — rather than returning an empty grants list. Only skip a post entirely for one of the specific reasons below.
-
 Return {{ "grants": [] }} — i.e. extract nothing — if the post is:
 - Announcing that someone has ALREADY won, received or been awarded funding.
 - A recap of an event, conference, webinar or partnership, even if funding is mentioned.
-- A job vacancy for a permanent or fixed-term STAFF employee (e.g. "Now hiring: Program Officer," asking for a CV/résumé) — NOT a competitively tendered individual consultancy. If the post has tender/procurement mechanics (a bidding portal, a Terms of Reference, a formal submission deadline), treat it as a solicitation and extract it, even when it names a single "consultant" as the eligible bidder.
-- Advertising a paid course, training programme, certification, workshop, webinar or masterclass that BURN would pay a fee to attend as a participant — not a grant, tender or funding opportunity that provides money or a contract TO BURN.
+- A job vacancy for an individual employee (a staff role), rather than a tender, consultancy assignment or funding call open to organisations.
 - An opportunity whose stated deadline has clearly already passed.
 - Primarily an agriculture, forestry or land-use opportunity — farming, crops, livestock, irrigation, agri-processing, agroforestry, reforestation/afforestation, tree planting, REDD+, land restoration, biodiversity or conservation — even where climate or energy is mentioned. BURN's scope is clean cooking, cookstoves, clean energy and energy transition, and carbon markets. An efficient-cookstove programme that cites reduced deforestation as a co-benefit IS in scope; a forestry or land-restoration programme is not.
 
@@ -268,18 +250,7 @@ def parse_records(response: requests.Response) -> list[dict]:
 
 def poll_snapshot(snapshot_id: str) -> list[dict]:
     """If the sync endpoint times out it returns a snapshot_id instead; wait for
-    that job to finish and pull the results.
-
-    Returns as soon as ANY non-empty batch comes back, even a partial one —
-    this is back to the original behavior. An earlier version of this function
-    waited for a FULL POSTS_PER_COMPANY batch before returning, up to
-    POLL_MAX_ATTEMPTS x POLL_INTERVAL_SECONDS (5 minutes) per source. That
-    caught a few older-but-still-fresh posts that this version can miss, but
-    with ~15-20 sources, a handful needing the full wait was enough on its own
-    to blow past the workflow's 30-minute ceiling — before Groq is even
-    involved. Sources are re-checked twice a week, so a post missed on one run
-    is very likely still there (or superseded by a newer one) on the next.
-    """
+    that job to finish and pull the results."""
     headers = {"Authorization": f"Bearer {BRIGHTDATA_API_KEY}"}
     print(f"  … job queued ({snapshot_id}), waiting for it to finish")
 
@@ -384,32 +355,20 @@ def post_age_days(record: dict) -> float | None:
 
 
 def is_solicitation(record: dict) -> bool:
-    """Keyword gate that runs BEFORE a post reaches Groq — this is what
-    actually controls run time, since it decides how many posts get an
-    expensive Groq call at all.
-
-    Requires a SOLICITATION_SIGNALS match (RFP, EOI, "call for...", "seeking
-    partners", etc. — phrases that essentially never show up outside a genuine
-    call for applications) and rejects EXCLUDE_SIGNALS hits (agriculture,
-    livestock, etc.).
-
-    Deliberately does NOT also require a TIMING_SIGNALS and TOPIC_SIGNALS
-    match, unlike an earlier version of this gate: requiring all three at once
-    excluded real, qualified opportunities whose wording didn't happen to hit
-    one of those two fixed phrase lists (e.g. a "CALL FOR BUSINESS PLANS" post
-    with no post text matching any TIMING_SIGNALS phrase). SOLICITATION_SIGNALS
-    alone is specific enough to keep Groq's workload small; anything that gets
-    this far still has to survive Groq's own, more nuanced judgment
-    (EXTRACTION_SYSTEM_PROMPT) before it becomes a grant."""
+    """Narrow gate: a real, time-bound, on-topic call for applications."""
     text = " ".join(
         str(record.get(field) or "")
         for field in ("headline", "post_text", "title")
     ).lower()
-    if len(text) < 40:
+    if len(text) < 120:
         return False
     if any(signal in text for signal in EXCLUDE_SIGNALS):
         return False
-    return any(signal in text for signal in SOLICITATION_SIGNALS)
+    return (
+        any(signal in text for signal in SOLICITATION_SIGNALS)
+        and any(signal in text for signal in TIMING_SIGNALS)
+        and any(signal in text for signal in TOPIC_SIGNALS)
+    )
 
 
 def external_links(record: dict) -> list[str]:
@@ -483,18 +442,8 @@ def extract_json_object(text: str) -> str:
     return text[start:end + 1] if start != -1 and end > start else text
 
 
-RETRY = object()  # sentinel: a technical failure, not a real "no opportunity here" verdict
-
-
-def extract_opportunity(post: dict):
-    """Run one post through Groq and get structured opportunity fields back.
-
-    Returns a dict of fields if Groq extracted a real opportunity, None if
-    Groq evaluated the post and genuinely found nothing extractable, or the
-    RETRY sentinel if the call itself failed technically (rate limit, network
-    error, bad JSON). The caller must NOT mark a RETRY post as "seen" — it
-    should get a real second chance next run instead of being lost for good.
-    """
+def extract_opportunity(post: dict) -> dict | None:
+    """Run one post through Groq and get structured opportunity fields back."""
     body = "\n\n".join(filter(None, [
         f"Posted by: {post.get('author_name') or 'Unknown'}",
         f"Posted on: {post.get('posted_at') or 'Unknown'}",
@@ -535,23 +484,23 @@ def extract_opportunity(post: dict):
             break
         except Exception as err:
             print(f"    ! Groq request failed: {err}")
-            return RETRY
+            return None
 
     if content is None:
-        print("    ! Groq rate-limited after retries; will retry this post next run")
-        return RETRY
+        print("    ! Groq rate-limited after retries; skipping this post")
+        return None
 
     try:
         parsed = json.loads(extract_json_object(content))
     except (json.JSONDecodeError, TypeError):
-        print("    ! Groq returned unparseable JSON; will retry this post next run")
-        return RETRY
+        print("    ! Groq returned unparseable JSON; skipping this post")
+        return None
 
     grants = parsed.get("grants") or []
     if not grants or not isinstance(grants, list):
         return None
     fields = grants[0]
-    return fields if isinstance(fields, dict) and fields.get("title") else None
+    return fields if isinstance(fields, dict) and fields.get("title") else None 
 
 
 def content_hash(title: str, url: str) -> str:
@@ -566,10 +515,10 @@ def save_grant(fields: dict, post: dict) -> bool:
 
     application_url always points back to the LinkedIn post itself, not the
     link or email Groq pulled out of the post text — those are often a
-    mailto: address or a login-walled procurement portal, which makes for a
-    broken or unhelpful "Go to opportunity" click. The LinkedIn post always
-    loads and shows full context, including how to apply, so that's what the
-    button should point to.
+    mailto: address (as with the MECS carbon finance post) or a login-walled
+    procurement portal, which makes for a broken or unhelpful "Go to
+    opportunity" click. The LinkedIn post always loads and shows full context,
+    including how to apply, so that's what the button should point to.
     """
     application_url = post["post_url"]
     title = str(fields.get("title") or "").strip()
@@ -661,38 +610,21 @@ def main() -> None:
         print("\nDone. No new solicitations found.")
         return
 
-    # Dedup is back: a post only gets skipped here once Groq has actually
-    # given it a real verdict (extracted, or genuinely excluded) — see
-    # extract_opportunity()'s RETRY sentinel below. A post that failed for a
-    # technical reason (rate limit, network error) is never marked "seen", so
-    # it's retried next run instead of being silently lost. Re-litigating
-    # posts Groq has already judged, every single run forever, was the main
-    # thing blowing up run time — this brings that back under control without
-    # reintroducing the old "lost forever on a 429" problem.
     already = seen_post_urls([row["post_url"] for row in candidates])
     fresh = [row for row in candidates if row["post_url"] not in already]
     print(f"\n{len(fresh)} new post(s) to extract ({len(candidates) - len(fresh)} seen before)")
 
-    # Logged one post at a time, right after it's processed — not batched to
-    # the end — so a mid-run timeout (the workflow's 30-minute ceiling) only
-    # loses whatever hadn't been reached yet, never work already done. Each
-    # iteration also paces itself (GROQ_PACING_SECONDS) so a big batch of new
-    # posts doesn't sprint into Groq's rate limit and burn time on 429 retries.
     saved = 0
-    logged = 0
     for post in fresh:
         print(f"  → {(post.get('headline') or post['post_url'])[:70]}")
         fields = extract_opportunity(post)
-        if fields is RETRY:
-            print("    - technical failure; will retry this post next run")
-        else:
-            if not fields:
-                print("    - nothing extractable; skipped")
-            elif save_grant(fields, post):
-                saved += 1
-            logged += log_posts([post])
-        time.sleep(GROQ_PACING_SECONDS)
+        if not fields:
+            print("    - nothing extractable; skipped")
+            continue
+        if save_grant(fields, post):
+            saved += 1
 
+    logged = log_posts(fresh)
     print(f"\nDone. {saved} opportunity/ies added to the Grant Scanner, {logged} post(s) logged.")
 
 

@@ -27,6 +27,7 @@ export default function GrantScanner() {
   const [trackedIds, setTrackedIds] = useState<Set<string>>(new Set());
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [discardingId, setDiscardingId] = useState<string | null>(null);
+
   useEffect(() => {
     loadData();
   }, []);
@@ -66,16 +67,41 @@ export default function GrantScanner() {
     return s.toLowerCase().replace(/[^a-z0-9]/g, "");
   }
 
-   // Reads the `discarded` column without requiring it in the Grant type, so
+  // Reads the `discarded` column without requiring it in the Grant type, so
   // this still compiles (and the page still loads) whether or not the column
   // has been added in Supabase yet.
   function isDiscarded(grant: Grant) {
     return (grant as Grant & { discarded?: boolean }).discarded === true;
   }
 
+  // Deadlines already in the past are never useful in a tracker of OPEN
+  // opportunities, so they're hidden the same way a discarded grant is —
+  // automatically, and without waiting for a rescan. This is a display-side
+  // filter, not a deletion: the row still exists (in case a bad date was
+  // extracted), it just won't show. Compared by calendar day rather than the
+  // exact moment `now` is evaluated, so a grant doesn't vanish mid-way
+  // through its own deadline day.
+  function isExpired(grant: Grant) {
+    if (!grant.deadline) return false;
+    const deadline = new Date(grant.deadline);
+    if (Number.isNaN(deadline.getTime())) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return deadline < today;
+  }
+
+  // LinkedIn-sourced opportunities sort to the top. Done here rather than in
+  // the database query on purpose: ordering by a column that doesn't exist yet
+  // would make the whole query fail, and this way the page works with or
+  // without the `priority` column.
+  function priorityOf(grant: Grant) {
+    return (grant as Grant & { priority?: number }).priority ?? 0;
+  }
+
   const filteredGrants = useMemo(() => {
-    return grants.filter((g) => {
+    const visible = grants.filter((g) => {
       if (isDiscarded(g)) return false;
+      if (isExpired(g)) return false;
       if (activeFocusAreas.length > 0) {
         const overlap = g.focus_areas?.some((a) =>
           activeFocusAreas.some((active) => normalizeTag(a) === normalizeTag(active))
@@ -89,6 +115,15 @@ export default function GrantScanner() {
       }
       return true;
     });
+
+    // Stable sort: priority first, then keep the order the query already gave
+    // us (relevance score, then most recently seen).
+    return visible
+      .map((grant, index) => ({ grant, index }))
+      .sort((a, b) =>
+        priorityOf(b.grant) - priorityOf(a.grant) || a.index - b.index
+      )
+      .map((entry) => entry.grant);
   }, [grants, activeFocusAreas, minValue, geography]);
 
   async function trackGrant(grant: Grant) {
@@ -100,6 +135,7 @@ export default function GrantScanner() {
       setTrackedIds((prev) => new Set(prev).add(grant.id));
     }
   }
+
   async function discardGrant(grant: Grant) {
     if (!window.confirm(`Discard "${grant.title}"? It will stop showing up in this list.`)) return;
 
@@ -119,6 +155,13 @@ export default function GrantScanner() {
     }
     setDiscardingId(null);
   }
+
+  // Reads `source_type` without requiring it in the Grant type, same trick as
+  // isDiscarded above — works whether or not the column exists yet.
+  function isFromLinkedIn(grant: Grant) {
+    return (grant as Grant & { source_type?: string }).source_type === "linkedin";
+  }
+
   function isNew(grant: Grant) {
     if (!grant.first_seen_at) return false;
     const seenAt = new Date(grant.first_seen_at).getTime();
@@ -239,12 +282,17 @@ export default function GrantScanner() {
                   </h3>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
+                  {isFromLinkedIn(grant) && (
+                    <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+                      LinkedIn
+                    </span>
+                  )}
                   {isNew(grant) && (
                     <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
                       New
                     </span>
                   )}
-                                    {grant.relevance_score != null && (
+                  {grant.relevance_score != null && (
                     <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-xs font-medium text-[var(--accent-dark)]">
                       {Math.round(grant.relevance_score)}% match
                     </span>

@@ -26,6 +26,16 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 // list of available models and swap it here — everything else stays the same.
 const GROQ_MODEL = "openai/gpt-oss-20b";
 
+// Computed once per run and handed to Groq explicitly below — the model has
+// no reliable notion of "today" on its own, so without this it can't
+// actually judge whether a stated deadline has passed. Also used as a
+// deterministic backstop in upsertGrant(): even if Groq's own judgment
+// misses an expired listing, the extracted date is checked again before
+// anything is saved. This matters especially for aggregator/database-style
+// sources (e.g. a funding database page) that mix live and long-closed
+// listings on the same page.
+const TODAY = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+
 // Fixed company context fed to the model on every extraction so it can judge
 // fit, not just summarize. Update this block if BURN's business changes.
 const BURN_PROFILE = `BURN Manufacturing — company profile for grant-fit assessment:
@@ -41,6 +51,8 @@ const BURN_PROFILE = `BURN Manufacturing — company profile for grant-fit asses
 - Agriculture is generally NOT a fit: BURN is a clean cookstove company, not an agriculture company. Funding primarily for on-farm equipment, agricultural inputs, crop or livestock production, agri-processing, or farm-level energy systems is a poor fit — even if it touches climate or energy — UNLESS it specifically funds clean cookstove manufacturing or distribution.`;
 
 const EXTRACTION_SYSTEM_PROMPT = `You extract structured, OPEN funding opportunities from raw web text — programs a reader could still apply to today — and assess how well each one fits BURN Manufacturing, a specific company described below. You are NOT extracting news stories about who has already won or received money.
+
+Today's date is ${TODAY}. Use this — not any date you might otherwise assume — whenever you need to judge whether a stated deadline has already passed. This matters especially on aggregator or "funding database" pages, which often list past-deadline entries alongside currently open ones.
 
 ${BURN_PROFILE}
 
@@ -71,10 +83,10 @@ Rules for "fit_analysis":
 Do NOT include an item in "grants" at all if the text is:
 - News reporting that a specific named company or organization has ALREADY secured, raised, received, won, been awarded, or closed a round of funding (e.g. "EcoNomad Solutions Secures £230K for..."). That is reporting someone else's past outcome, not an open call for applications.
 - A general venture capital / equity investment story, not a grant or donor program.
-- A funding round, program, or deadline that has already closed, with no indication of a new or recurring open cycle.
+- A funding round, program, or deadline that has already closed (i.e. any stated deadline before ${TODAY}), with no indication of a new or recurring open cycle.
 - Primarily an agriculture opportunity — on-farm equipment, agricultural inputs, crop or livestock production, agri-processing, or farm-level energy systems — unless it specifically funds clean cookstove manufacturing or distribution. BURN is a clean cookstove company; general agriculture funding should be excluded entirely.
 - A general press release, media article, or news coverage that reports on, promotes, or summarizes an organization, partnership, program, or event — even one that mentions funding, grants, or dollar amounts — UNLESS the same text also contains the actual application mechanics (clear eligibility criteria, how to apply, and either a specific deadline or a "rolling basis" statement). News describing that a program or partnership exists is not the same as that program's own open call for applications.
- - An advertisement for a paid course, training programme, certification, workshop, webinar or masterclass that the reader would pay a fee to attend — not a grant, tender, or funding opportunity that provides money or a contract to the applicant.
+
 Only include an item if it describes a program, fund, or call that a reader could realistically apply to — i.e. it has (or clearly implies) open applications, eligibility criteria, or a way to apply.
 
 If the text describes no open funding opportunity at all, respond with exactly: { "grants": [] }`;
@@ -162,11 +174,25 @@ function hashOf(title, url) {
   return crypto.createHash("sha256").update(`${title}::${url || ""}`.toLowerCase()).digest("hex");
 }
 
+// Deterministic backstop: don't rely on Groq's own "has this passed?"
+// judgment alone. Only trusts a strict ISO "YYYY-MM-DD" string — anything
+// else (a vague phrase, a malformed date) is left alone rather than guessed
+// at, since a plain string comparison against other formats isn't reliable.
+function deadlineHasPassed(deadline) {
+  if (typeof deadline !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(deadline)) return false;
+  return deadline < TODAY;
+}
+
 async function upsertGrant(fields, source, fallbackUrl) {
   if (!fields.title) return;
 
   if (looksLikeAwardNews(fields.title)) {
     console.log(`  - Skipped (reads like "already funded" news, not an open opportunity): ${fields.title}`);
+    return;
+  }
+
+  if (deadlineHasPassed(fields.deadline)) {
+    console.log(`  - Skipped (deadline ${fields.deadline} has already passed): ${fields.title}`);
     return;
   }
 

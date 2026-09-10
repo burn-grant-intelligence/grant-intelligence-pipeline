@@ -33,8 +33,15 @@ body {
   min-height: 100%;
   color: var(--ink);
   background-color: var(--bg);
+  /* Note: with background-attachment: fixed, these percentage stops are
+     relative to the viewport, not the full scrollable page — so the
+     "fade to solid" zone always sits near the bottom of whatever's
+     currently on screen, not the true bottom of the page. Keeping the max
+     opacity well under ~0.6 (rather than the ~0.9 this used to reach) is
+     what stops that zone from flattening contrast against the white
+     opportunity cards wherever it happens to land as you scroll. */
   background-image:
-    linear-gradient(180deg, rgba(251, 241, 230, 0.2) 0%, rgba(251, 241, 230, 0.55) 45%, rgba(251, 241, 230, 0.92) 100%),
+    linear-gradient(180deg, rgba(251, 241, 230, 0.15) 0%, rgba(251, 241, 230, 0.3) 50%, rgba(251, 241, 230, 0.55) 100%),
     url("/background.avif.avif");
   background-size: cover;
   background-position: center;

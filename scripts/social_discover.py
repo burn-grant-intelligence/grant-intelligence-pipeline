@@ -61,6 +61,13 @@ POLL_MAX_ATTEMPTS = 20
 GROQ_MAX_RETRIES = 3
 GROQ_RETRY_BACKOFF_SECONDS = 20  # fallback wait if Groq doesn't send a Retry-After header
 
+# Computed once per run and handed to Groq explicitly below — the model has no
+# reliable notion of "today" on its own, so without this it can't actually
+# judge whether a stated deadline has passed. Also used as a deterministic
+# backstop in save_grant(): even if Groq's own judgment misses an expired
+# post, the extracted date is checked again before anything is saved.
+TODAY = datetime.now(timezone.utc).date()
+
 # --- What counts as an opportunity ----------------------------------------
 # Deliberately narrow: only real solicitations. Loose words like "funding" or
 # "grant" on their own are NOT enough — a funder saying "we granted $2m to X"
@@ -136,6 +143,8 @@ BURN_PROFILE = """BURN Manufacturing — company profile for grant-fit assessmen
 
 EXTRACTION_SYSTEM_PROMPT = f"""You extract a structured, OPEN funding or procurement opportunity from the text of a LinkedIn post, and assess how well it fits BURN Manufacturing, a specific company described below.
 
+Today's date is {TODAY.isoformat()}. Use this — not any date you might otherwise assume — whenever you need to judge whether a stated deadline has already passed.
+
 {BURN_PROFILE}
 
 The text you are given is a LinkedIn post published by a funder, development programme or foundation. It has already been screened as looking like a solicitation. Your job is to turn it into structured data.
@@ -164,11 +173,14 @@ Rules for "fit_analysis":
 - If something looks like a MISMATCH, say so plainly — e.g. it targets operators far smaller than BURN's scale, the geography excludes BURN's countries, it is an equity investment rather than a grant, or it is a consultancy/advisory assignment rather than funding for BURN's own operations.
 - If the post gives too little detail to judge fit, set this field to null rather than guessing.
 
+A human reviews every opportunity you extract in the Grant Scanner before deciding whether to pursue it, and can discard anything irrelevant with one click. So when a post is a genuine, open, on-topic call for applications, extract it even if some secondary detail is thin or unclear — set the uncertain field to null and flag the uncertainty in fit_analysis — rather than returning an empty grants list. Only skip a post entirely for one of the specific reasons below.
+
 Return {{ "grants": [] }} — i.e. extract nothing — if the post is:
 - Announcing that someone has ALREADY won, received or been awarded funding.
 - A recap of an event, conference, webinar or partnership, even if funding is mentioned.
-- A job vacancy for an individual employee (a staff role), rather than a tender, consultancy assignment or funding call open to organisations.
-- An opportunity whose stated deadline has clearly already passed.
+- A job vacancy for a permanent or fixed-term STAFF employee (e.g. "Now hiring: Program Officer," asking for a CV/résumé) — NOT a competitively tendered individual consultancy. If the post has tender/procurement mechanics (a bidding portal, a Terms of Reference, a formal submission deadline), treat it as a solicitation and extract it, even when it names a single "consultant" as the eligible bidder.
+- Advertising a paid course, training programme, certification, workshop, webinar or masterclass that BURN would pay a fee to attend as a participant — not a grant, tender or funding opportunity that provides money or a contract TO BURN.
+- An opportunity whose stated deadline is before {TODAY.isoformat()} (today).
 - Primarily an agriculture, forestry or land-use opportunity — farming, crops, livestock, irrigation, agri-processing, agroforestry, reforestation/afforestation, tree planting, REDD+, land restoration, biodiversity or conservation — even where climate or energy is mentioned. BURN's scope is clean cooking, cookstoves, clean energy and energy transition, and carbon markets. An efficient-cookstove programme that cites reduced deforestation as a co-benefit IS in scope; a forestry or land-restoration programme is not.
 
 Otherwise extract exactly one item describing the opportunity."""
@@ -355,7 +367,16 @@ def post_age_days(record: dict) -> float | None:
 
 
 def is_solicitation(record: dict) -> bool:
-    """Narrow gate: a real, time-bound, on-topic call for applications."""
+    """Narrow gate: a real, on-topic call for applications.
+
+    Requires SOLICITATION_SIGNALS and TOPIC_SIGNALS to both match, and rejects
+    anything hitting EXCLUDE_SIGNALS. Deliberately does NOT also require a
+    TIMING_SIGNALS match: a genuine, currently-open call can state its
+    deadline in ways that don't happen to hit one of the fixed TIMING_SIGNALS
+    phrases (e.g. "submissions due September 15" vs. the listed "due by"),
+    and that was silently excluding real opportunities. TOPIC_SIGNALS stays
+    required — it's what keeps run time low without needing the timing
+    requirement too."""
     text = " ".join(
         str(record.get(field) or "")
         for field in ("headline", "post_text", "title")
@@ -366,7 +387,6 @@ def is_solicitation(record: dict) -> bool:
         return False
     return (
         any(signal in text for signal in SOLICITATION_SIGNALS)
-        and any(signal in text for signal in TIMING_SIGNALS)
         and any(signal in text for signal in TOPIC_SIGNALS)
     )
 
@@ -524,6 +544,18 @@ def save_grant(fields: dict, post: dict) -> bool:
     title = str(fields.get("title") or "").strip()
     if not title:
         return False
+
+    # Deterministic backstop: don't trust Groq's own "has this passed?"
+    # judgment alone. If it extracted a specific deadline, check it against
+    # today's actual date before saving anything.
+    deadline_raw = fields.get("deadline")
+    if deadline_raw:
+        try:
+            if datetime.strptime(str(deadline_raw), "%Y-%m-%d").date() < TODAY:
+                print(f"    - skipped (deadline {deadline_raw} has already passed)")
+                return False
+        except ValueError:
+            pass  # not a parseable date; let it through rather than guessing
 
     row = {
         "title": title,

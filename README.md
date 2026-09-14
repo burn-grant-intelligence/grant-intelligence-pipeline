@@ -6,25 +6,37 @@ extraction), and GitHub Actions (scheduled scraping).
 
 ## Structure
 
+- `app/`, `components/` — the Next.js frontend (Grant Scanner, Application Tracker,
+  and the Events tab).
 - `scripts/scan.mjs` — the scraper: reads active sources from Supabase, extracts
   structured grant data via Groq, upserts into Supabase with dedup.
 - `scripts/social_discover.py` — checks funder LinkedIn company pages (the
   `social_sources` table) for posts that look like open tenders, via Bright Data,
   extracts structured data via Groq, and queues the linked pages for the main scan.
-- `supabase/schema.sql` — the database schema (already applied via the SQL Editor).
+- `scripts/gemini_discover.py` — uses Gemini's Google Search grounding to find
+  candidate opportunities and industry events, then Gemini's `url_context` tool to
+  read each candidate page and extract structured fields. Opportunities go into
+  `grants` (tagged `source_type='gemini'`, shown with a green "Gemini" pill in the
+  Grant Scanner); events go into the separate `events` table, shown only in the
+  Events tab.
+- `supabase/schema.sql` — the core database schema (already applied via the SQL Editor).
 - `supabase/policies.sql` — Row Level Security policies (run once, after schema.sql).
+- `supabase/events_schema.sql` — the `events` table + its RLS policies (run once,
+  for the Gemini events feature).
 - `.github/workflows/daily-scan.yml` — runs the scraper on a schedule via GitHub Actions.
 - `.github/workflows/social-discover.yml` — runs social discovery twice a week via
+  GitHub Actions.
+- `.github/workflows/gemini-discover.yml` — runs Gemini discovery twice a week via
   GitHub Actions.
 
 ## Environment variables
 
 See `.env.example`. Two separate sets:
 - `NEXT_PUBLIC_*` ones go into Vercel's project Environment Variables (used by the browser).
-- The rest (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GROQ_API_KEY`, and
-  `BRIGHTDATA_API_KEY` for social discovery) go into this repo's GitHub Actions
-  secrets (Settings → Secrets and variables → Actions) — used only by the scrapers,
-  never shipped to the browser.
+- The rest (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GROQ_API_KEY`,
+  `BRIGHTDATA_API_KEY` for social discovery, and `GEMINI_API_KEY` for Gemini
+  discovery) go into this repo's GitHub Actions secrets (Settings → Secrets and
+  variables → Actions) — used only by the scrapers, never shipped to the browser.
 
 ## Adding a source to scan
 

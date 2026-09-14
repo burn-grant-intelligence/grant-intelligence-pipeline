@@ -263,10 +263,16 @@ def extract_opportunity(candidate: dict) -> dict | None:
     try:
         parsed = json.loads(extract_json_object(text))
     except (json.JSONDecodeError, TypeError):
-        print("    ! unparseable JSON from opportunity extraction")
+        print(f"    ! unparseable JSON from opportunity extraction (raw reply started: {text[:200]!r})")
         return None
     grants = parsed.get("grants") or []
     if not grants or not isinstance(grants, list):
+        # Gemini explicitly judged this page not worth extracting (per the
+        # exclusion rules in the prompt) rather than a technical failure —
+        # print a preview so a real run's log says WHY, not just that it
+        # happened, which is what actually lets MAX_CANDIDATES_PER_RUN and
+        # the prompt get tuned against real data.
+        print(f"    (Gemini returned no grants; raw reply started: {text[:200]!r})")
         return None
     fields = grants[0]
     return fields if isinstance(fields, dict) and fields.get("title") else None
@@ -282,10 +288,11 @@ def extract_event(candidate: dict) -> dict | None:
     try:
         parsed = json.loads(extract_json_object(text))
     except (json.JSONDecodeError, TypeError):
-        print("    ! unparseable JSON from event extraction")
+        print(f"    ! unparseable JSON from event extraction (raw reply started: {text[:200]!r})")
         return None
     events = parsed.get("events") or []
     if not events or not isinstance(events, list):
+        print(f"    (Gemini returned no events; raw reply started: {text[:200]!r})")
         return None
     fields = events[0]
     return fields if isinstance(fields, dict) and fields.get("title") else None

@@ -4,13 +4,15 @@ import { useState } from "react";
 import GrantScanner from "@/components/GrantScanner";
 import ApplicationTracker from "@/components/ApplicationTracker";
 import DraftApplication from "@/components/DraftApplication";
+import EventsScanner from "@/components/EventsScanner";
 
-type Tab = "scanner" | "tracker" | "draft";
+type Tab = "scanner" | "tracker" | "draft" | "events";
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "scanner", label: "Grant Scanner", icon: "🔍" },
   { id: "tracker", label: "Application Tracker", icon: "📋" },
   { id: "draft", label: "Draft Application", icon: "✍️" },
+  { id: "events", label: "Events", icon: "📅" },
 ];
 
 export default function Home() {
@@ -51,6 +53,7 @@ export default function Home() {
         {tab === "scanner" && <GrantScanner />}
         {tab === "tracker" && <ApplicationTracker />}
         {tab === "draft" && <DraftApplication />}
+        {tab === "events" && <EventsScanner />}
       </main>
     </div>
   );

@@ -162,6 +162,14 @@ export default function GrantScanner() {
     return (grant as Grant & { source_type?: string }).source_type === "linkedin";
   }
 
+  // Gemini-sourced opportunities show a green pill (a distinct shade from the
+  // "New" tag's emerald, so the two read separately when both appear on the
+  // same card) but otherwise sort and filter exactly like everything else —
+  // unlike LinkedIn, they don't get top-of-list priority.
+  function isFromGemini(grant: Grant) {
+    return (grant as Grant & { source_type?: string }).source_type === "gemini";
+  }
+
   function isNew(grant: Grant) {
     if (!grant.first_seen_at) return false;
     const seenAt = new Date(grant.first_seen_at).getTime();
@@ -285,6 +293,11 @@ export default function GrantScanner() {
                   {isFromLinkedIn(grant) && (
                     <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
                       LinkedIn
+                    </span>
+                  )}
+                  {isFromGemini(grant) && (
+                    <span className="rounded-full bg-green-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700">
+                      Gemini
                     </span>
                   )}
                   {isNew(grant) && (

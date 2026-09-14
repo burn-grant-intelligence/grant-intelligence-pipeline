@@ -17,7 +17,15 @@ on:
 jobs:
   gemini:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # A real run at the old 15-candidate cap (already using the url_context +
+    # google_search combo) took about 3 minutes end to end — roughly 12s per
+    # candidate including GEMINI_PACING_SECONDS. At the new cap (up to 15
+    # opportunities + 25 events = 40 candidates), that same rate projects to
+    # ~8 minutes; 10 gives a bit of headroom for retries/slower fetches
+    # without leaving the job free to run indefinitely. If real runs start
+    # timing out here, that's the signal to trim MAX_EVENTS_PER_RUN back
+    # down rather than just raising this further.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 

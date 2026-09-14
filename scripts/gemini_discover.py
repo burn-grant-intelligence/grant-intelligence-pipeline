@@ -59,8 +59,14 @@ GEMINI_MODEL = "gemini-2.5-flash"
 # --- Cost / noise controls -------------------------------------------------
 # One discovery call, plus up to this many per-candidate extraction calls —
 # bounds run time and API usage the same way POSTS_PER_COMPANY does for
-# social_discover.py.
-MAX_CANDIDATES_PER_RUN = 15
+# social_discover.py. Opportunities and events are capped SEPARATELY (each
+# category has its own budget below) rather than sharing one combined pool —
+# events are deliberately given a much bigger allowance since they don't need
+# the tight company-fit judgment opportunities do (see EVENT_FOCUS_TOPICS),
+# and this is meant to surface as many relevant events as genuinely exist,
+# not just fill a shared quota that opportunities would otherwise crowd out.
+MAX_OPPORTUNITIES_PER_RUN = 15
+MAX_EVENTS_PER_RUN = 25
 
 GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_BACKOFF_SECONDS = 20  # fallback wait if no retry hint is available
@@ -80,14 +86,29 @@ BURN_PROFILE = """BURN Manufacturing — company profile for grant-fit assessmen
 - Strong-fit program patterns: results-based financing (RBF) programs for clean cooking, calls for proposals / "Call4Solutions" / tenders specifically for cookstove distribution or manufacturing, institutional and school-cooking programs, and higher-tier/modern eCooking scale-up programs.
 - Agriculture is generally NOT a fit: BURN is a clean cookstove company, not an agriculture company. Funding primarily for on-farm equipment, agricultural inputs, crop or livestock production, agri-processing, or farm-level energy systems is a poor fit — even if it touches climate or energy — UNLESS it specifically funds clean cookstove manufacturing or distribution."""
 
-DISCOVERY_PROMPT = f"""Today's date is {TODAY.isoformat()}. Use Google Search to find CURRENTLY OPEN / UPCOMING items relevant to the company described below.
+# Deliberately broader than BURN_PROFILE's own fit criteria — events are a
+# lightweight visibility/networking feature, not something that needs to
+# pass the same company-fit bar as a funding opportunity, so this list is
+# topic-only, per explicit user request to widen event coverage.
+EVENT_FOCUS_TOPICS = [
+    "carbon markets",
+    "climate",
+    "clean cooking",
+    "energy",
+    "development finance",
+    "environmental, social and governance (ESG)",
+    "sustainability",
+]
+
+DISCOVERY_PROMPT = f"""Today's date is {TODAY.isoformat()}. Use Google Search to find CURRENTLY OPEN / UPCOMING items relevant to the company described below, across two SEPARATE categories, each with its OWN limit — filling one category does not reduce the other's limit.
 
 {BURN_PROFILE}
 
-Find up to {MAX_CANDIDATES_PER_RUN} items total, across two categories:
+CATEGORY "opportunity" — up to {MAX_OPPORTUNITIES_PER_RUN} items: a genuine, currently open funding or procurement call — an RFP, EOI, "Call for Solutions", call for proposals, tender, results-based financing call, or similar. Topics: clean cooking, cookstoves, clean/renewable energy, energy access, energy transition, carbon credits/carbon markets, climate finance. Lean broad here at the discovery stage — a detailed fit assessment happens later, per item, so when a topically-relevant opportunity's exact fit is unclear at this stage, include it rather than filtering it out now.
 
-1. "opportunity" — a genuine, currently open funding or procurement call: an RFP, EOI, "Call for Solutions", call for proposals, tender, results-based financing call, or similar, that this company could realistically apply to. Topics: clean cooking, cookstoves, clean/renewable energy, energy access, energy transition, carbon credits/carbon markets, climate finance.
-2. "event" — a genuine, upcoming (not already past) industry event: a conference, summit, forum, or webinar in the same topic space that this company might want to attend for visibility or networking — NOT a funding call, NOT a news article about a past event.
+CATEGORY "event" — up to {MAX_EVENTS_PER_RUN} items: a genuine, upcoming (not already past) industry event — a conference, summit, forum, webinar, or trade show — NOT a funding call, NOT a news article about a past event. Events do NOT need to match the company profile as tightly as opportunities do (this is for general visibility/networking) — cast a wide net across ANY of these topic areas:
+{chr(10).join(f"- {topic}" for topic in EVENT_FOCUS_TOPICS)}
+This is a high season for this kind of event — actively search across all of the topics above and return as many distinct, genuinely upcoming events as you can find, up to the category limit. Don't stop at the first few you find.
 
 Respond with ONLY a JSON object (no markdown fences, no prose before or after) of the shape:
 {{ "candidates": [ {{ "kind": "opportunity" | "event", "title": string, "url": string, "why_relevant": string }} ] }}
@@ -97,18 +118,21 @@ Rules:
 - Skip anything whose deadline or event date is clearly before {TODAY.isoformat()}.
 - Skip news recaps of funding already awarded, and recaps of events that already happened.
 - Do not list the same underlying opportunity or event twice under different URLs.
-- It's fine to return fewer than {MAX_CANDIDATES_PER_RUN}, or zero, if that's genuinely all that qualifies.
+- Each category's limit is independent — a full "event" category does not reduce how many "opportunity" items you can return, and vice versa.
+- It's fine to return fewer than a category's limit, or zero for a category, if that's genuinely all that qualifies.
 
 If nothing qualifies at all, respond with exactly: {{ "candidates": [] }}"""
 
-OPPORTUNITY_EXTRACTION_PROMPT_TEMPLATE = f"""Read the page at this URL using your url_context tool, then extract a structured, OPEN funding or procurement opportunity from it, and assess how well it fits the company described below.
+OPPORTUNITY_EXTRACTION_PROMPT_TEMPLATE = f"""Read the page at the URL below using your url_context tool, then extract a structured, OPEN funding or procurement opportunity from it, and assess how well it fits the company described below.
+
+You also have Google Search available. The URL below often comes from a search-grounding redirect rather than the funder's own page, so it sometimes lands on the wrong thing — a general press-release index, a news list, a category/homepage, or a page that fails to load — instead of the specific "{{title}}" item. If url_context does not show you the specific opportunity itself (not a list, not an unrelated page, not empty/broken), use Google Search to find the correct, specific page for "{{title}}" — search by its name and, if known, its funder — then read THAT page with url_context instead of giving up. Only fall back to an empty result if, after actually trying to search for and read the specific page, you still cannot find real, extractable content about it.
 
 Today's date is {TODAY.isoformat()}. Use this — not any date you might otherwise assume — whenever you need to judge whether a stated deadline has already passed.
 
 {BURN_PROFILE}
 
-URL to read: {{url}}
-This page was already flagged as a likely "{{title}}" opportunity — confirm or correct that from the actual page content.
+URL to read first: {{url}}
+This page was already flagged as a likely "{{title}}" opportunity — confirm or correct that from the actual page content (or from the specific page you find via search, per above).
 
 Respond with ONLY a JSON object — no markdown code fences, no explanation before or after — of the shape:
 {{{{ "grants": [ {{{{ ... }}}} ] }}}}
@@ -134,6 +158,8 @@ Rules for "fit_analysis":
 - If something looks like a MISMATCH, say so plainly — e.g. it targets operators far smaller than the company's scale, the geography excludes its countries, it is an equity investment rather than a grant, or it is a consultancy/advisory assignment rather than funding for the company's own operations.
 - If the page gives too little detail to judge fit, set this field to null rather than guessing.
 
+A human reviews every opportunity you extract in the Grant Scanner before deciding whether to pursue it, and can discard anything irrelevant with one click. So lean toward EXTRACTING a genuine, open, on-topic funding/procurement opportunity even when: the company-fit looks partial, uncertain, or even like a real mismatch (e.g. it needs an accredited intermediary, targets a different tier of operator, or only partially overlaps the profile's geography or focus) — note that plainly in fit_analysis instead of returning nothing; or some secondary field (amount, exact deadline, eligibility) is thin or unstated — use null for that field rather than skipping the whole item. Only return {{{{ "grants": [] }}}} for one of the specific structural reasons listed below, never merely because fit looks weak or details are incomplete.
+
 Return {{{{ "grants": [] }}}} — i.e. extract nothing — if the page is:
 - Announcing that someone has ALREADY won, received or been awarded funding.
 - A recap of an event, conference, webinar or partnership, even if funding is mentioned.
@@ -145,12 +171,14 @@ Return {{{{ "grants": [] }}}} — i.e. extract nothing — if the page is:
 
 Otherwise extract exactly one item describing the opportunity."""
 
-EVENT_EXTRACTION_PROMPT_TEMPLATE = f"""Read the page at this URL using your url_context tool, then extract structured details about the industry event it describes.
+EVENT_EXTRACTION_PROMPT_TEMPLATE = f"""Read the page at the URL below using your url_context tool, then extract structured details about the industry event it describes.
+
+You also have Google Search available. The URL below often comes from a search-grounding redirect rather than the event's own page, so it sometimes lands on the wrong thing — a general press-release index, a news list, a category/homepage, or a page that fails to load — instead of the specific "{{title}}" event page. If url_context does not show you the specific event itself (not a list, not an unrelated page, not empty/broken), use Google Search to find the correct, specific event page for "{{title}}" — search by its name and, if known, its organizer — then read THAT page with url_context instead of giving up. Only fall back to an empty result if, after actually trying to search for and read the specific page, you still cannot find real, extractable content about it.
 
 Today's date is {TODAY.isoformat()}. Use this — not any date you might otherwise assume — whenever you need to judge whether the event has already happened.
 
-URL to read: {{url}}
-This page was already flagged as a likely "{{title}}" event — confirm or correct that from the actual page content.
+URL to read first: {{url}}
+This page was already flagged as a likely "{{title}}" event — confirm or correct that from the actual page content (or from the specific page you find via search, per above).
 
 Respond with ONLY a JSON object — no markdown code fences, no explanation before or after — of the shape:
 {{{{ "events": [ {{{{ ... }}}} ] }}}}
@@ -195,17 +223,20 @@ def extract_json_object(text: str) -> str:
     return text[start:end + 1] if start != -1 and end > start else text
 
 
-def call_gemini(contents: str, tool: types.Tool) -> str | None:
+def call_gemini(contents: str, tools: list[types.Tool]) -> str | None:
     """Shared call wrapper with retry-on-429, used for both the discovery
-    call (google_search tool) and each per-candidate extraction call
-    (url_context tool). Returns the response text, or None if the call
-    ultimately failed."""
+    call (google_search tool alone) and each per-candidate extraction call
+    (url_context + google_search together — see the extraction prompts for
+    why both are needed: the discovery step's URL is often a search-grounding
+    redirect that doesn't land on the specific page, and google_search lets
+    the model re-find the right one instead of giving up). Returns the
+    response text, or None if the call ultimately failed."""
     for attempt in range(GEMINI_MAX_RETRIES):
         try:
             response = client.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=contents,
-                config=types.GenerateContentConfig(tools=[tool]),
+                config=types.GenerateContentConfig(tools=tools),
             )
             return response.text
         except genai_errors.APIError as err:
@@ -227,7 +258,7 @@ def call_gemini(contents: str, tool: types.Tool) -> str | None:
 def discover_candidates() -> list[dict]:
     """One call, grounded with Google Search, to find candidate opportunities
     and events. Returns a list of {kind, title, url, why_relevant} dicts."""
-    text = call_gemini(DISCOVERY_PROMPT, types.Tool(google_search=types.GoogleSearch()))
+    text = call_gemini(DISCOVERY_PROMPT, [types.Tool(google_search=types.GoogleSearch())])
     if not text:
         return []
 
@@ -250,14 +281,24 @@ def discover_candidates() -> list[dict]:
         if not c.get("url") or not c.get("title"):
             continue
         cleaned.append(c)
-    return cleaned[:MAX_CANDIDATES_PER_RUN]
+
+    # Cap each category independently — Gemini is asked for two separate
+    # budgets (see DISCOVERY_PROMPT), but nothing stops it from returning
+    # more of one kind than asked, so enforce both limits here rather than
+    # trusting the model, same as the old single combined slice used to.
+    opportunities = [c for c in cleaned if c["kind"] == "opportunity"][:MAX_OPPORTUNITIES_PER_RUN]
+    events = [c for c in cleaned if c["kind"] == "event"][:MAX_EVENTS_PER_RUN]
+    return opportunities + events
 
 
 def extract_opportunity(candidate: dict) -> dict | None:
     prompt = OPPORTUNITY_EXTRACTION_PROMPT_TEMPLATE.format(
         url=candidate["url"], title=candidate["title"]
     )
-    text = call_gemini(prompt, types.Tool(url_context=types.UrlContext()))
+    text = call_gemini(prompt, [
+        types.Tool(url_context=types.UrlContext()),
+        types.Tool(google_search=types.GoogleSearch()),
+    ])
     if not text:
         return None
     try:
@@ -270,8 +311,8 @@ def extract_opportunity(candidate: dict) -> dict | None:
         # Gemini explicitly judged this page not worth extracting (per the
         # exclusion rules in the prompt) rather than a technical failure —
         # print a preview so a real run's log says WHY, not just that it
-        # happened, which is what actually lets MAX_CANDIDATES_PER_RUN and
-        # the prompt get tuned against real data.
+        # happened, which is what actually lets the per-category limits and
+        # prompts get tuned against real data.
         print(f"    (Gemini returned no grants; raw reply started: {text[:200]!r})")
         return None
     fields = grants[0]
@@ -282,7 +323,10 @@ def extract_event(candidate: dict) -> dict | None:
     prompt = EVENT_EXTRACTION_PROMPT_TEMPLATE.format(
         url=candidate["url"], title=candidate["title"]
     )
-    text = call_gemini(prompt, types.Tool(url_context=types.UrlContext()))
+    text = call_gemini(prompt, [
+        types.Tool(url_context=types.UrlContext()),
+        types.Tool(google_search=types.GoogleSearch()),
+    ])
     if not text:
         return None
     try:

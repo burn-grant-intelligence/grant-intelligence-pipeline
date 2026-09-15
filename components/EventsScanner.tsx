@@ -233,12 +233,23 @@ export default function EventsScanner() {
                 {event.geography && <span>{event.geography}</span>}
               </div>
 
-              {!open && event.description && (
-                <p className="mt-3 line-clamp-2 text-sm text-neutral-600">{event.description}</p>
+              {!open && (event.fit_analysis || event.description) && (
+                <p className="mt-3 line-clamp-2 text-sm text-neutral-600">
+                  {event.fit_analysis || event.description}
+                </p>
               )}
 
               {open && (
                 <div className="mt-4 space-y-4 border-t border-[var(--border)] pt-4">
+                  {event.fit_analysis && (
+                    <div className="rounded-md border-l-4 border-[var(--accent)] bg-[var(--accent-soft)] p-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent-dark)]">
+                        Fit for BURN
+                      </p>
+                      <p className="mt-1 text-sm text-neutral-700">{event.fit_analysis}</p>
+                    </div>
+                  )}
+
                   {event.description && (
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--ink-muted)]">

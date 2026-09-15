@@ -62,7 +62,8 @@ GEMINI_MODEL = "gemini-2.5-flash"
 # social_discover.py. Opportunities and events are capped SEPARATELY (each
 # category has its own budget below) rather than sharing one combined pool —
 # events are deliberately given a much bigger allowance since they don't need
-# the tight company-fit judgment opportunities do (see EVENT_FOCUS_TOPICS),
+# the tight company-fit judgment opportunities do (see PRIMARY_EVENT_TOPICS/
+# SECONDARY_EVENT_TOPICS below),
 # and this is meant to surface as many relevant events as genuinely exist,
 # not just fill a shared quota that opportunities would otherwise crowd out.
 MAX_OPPORTUNITIES_PER_RUN = 15
@@ -89,8 +90,11 @@ BURN_PROFILE = """BURN Manufacturing — company profile for grant-fit assessmen
 # Deliberately broader than BURN_PROFILE's own fit criteria — events are a
 # lightweight visibility/networking feature, not something that needs to
 # pass the same company-fit bar as a funding opportunity, so this list is
-# topic-only, per explicit user request to widen event coverage.
-EVENT_FOCUS_TOPICS = [
+# topic-only. Split into two tiers per explicit user feedback after reviewing
+# actual results in the Events tab: PRIMARY is the core sector list (search
+# this thoroughly, first); SECONDARY widens coverage but should not crowd out
+# primary-topic events — see how these are used in DISCOVERY_PROMPT below.
+PRIMARY_EVENT_TOPICS = [
     "carbon markets",
     "climate",
     "clean cooking",
@@ -99,6 +103,13 @@ EVENT_FOCUS_TOPICS = [
     "environmental, social and governance (ESG)",
     "sustainability",
 ]
+SECONDARY_EVENT_TOPICS = [
+    "climate technology and innovation",
+    "impact investment",
+    "nature / environmental markets (e.g. carbon credits, biodiversity credits, ecosystem-service markets — market mechanisms, not general conservation policy)",
+    "gender and inclusive development",
+    "Africa / emerging-market development",
+]
 
 DISCOVERY_PROMPT = f"""Today's date is {TODAY.isoformat()}. Use Google Search to find CURRENTLY OPEN / UPCOMING items relevant to the company described below, across two SEPARATE categories, each with its OWN limit — filling one category does not reduce the other's limit.
 
@@ -106,9 +117,19 @@ DISCOVERY_PROMPT = f"""Today's date is {TODAY.isoformat()}. Use Google Search to
 
 CATEGORY "opportunity" — up to {MAX_OPPORTUNITIES_PER_RUN} items: a genuine, currently open funding or procurement call — an RFP, EOI, "Call for Solutions", call for proposals, tender, results-based financing call, or similar. Topics: clean cooking, cookstoves, clean/renewable energy, energy access, energy transition, carbon credits/carbon markets, climate finance. Lean broad here at the discovery stage — a detailed fit assessment happens later, per item, so when a topically-relevant opportunity's exact fit is unclear at this stage, include it rather than filtering it out now.
 
-CATEGORY "event" — up to {MAX_EVENTS_PER_RUN} items: a genuine, upcoming (not already past) industry event — a conference, summit, forum, webinar, or trade show — NOT a funding call, NOT a news article about a past event. Events do NOT need to match the company profile as tightly as opportunities do (this is for general visibility/networking) — cast a wide net across ANY of these topic areas:
-{chr(10).join(f"- {topic}" for topic in EVENT_FOCUS_TOPICS)}
-This is a high season for this kind of event — actively search across all of the topics above and return as many distinct, genuinely upcoming events as you can find, up to the category limit. Don't stop at the first few you find.
+CATEGORY "event" — up to {MAX_EVENTS_PER_RUN} items: a genuine, upcoming (not already past) industry event — a conference, summit, forum, webinar, or trade show — NOT a funding call, NOT a news article about a past event. Events do NOT need to match the company profile as tightly as opportunities do (this is for general visibility/networking).
+
+Search these PRIMARY topics thoroughly first — this is a high season for this kind of event, so actively look across all of them rather than stopping at the first few you find:
+{chr(10).join(f"- {topic}" for topic in PRIMARY_EVENT_TOPICS)}
+
+Once you've covered the primary topics well, use any remaining budget on these SECONDARY topics too — genuinely relevant secondary-topic events are still worth including, but don't let them crowd out primary-topic events if you have to choose:
+{chr(10).join(f"- {topic}" for topic in SECONDARY_EVENT_TOPICS)}
+
+Do NOT include, even if a keyword above technically matches:
+- Generic diplomatic/policy commemorations, anniversaries, or high-level UN meetings that aren't a concrete industry conference/expo/summit a company would actually attend for business purposes (e.g. "High-Level Meeting to Commemorate the Nth Anniversary of [a Declaration]").
+- General food-system, agriculture, or nutrition events (e.g. a "World Food Forum") — same rationale as the agriculture exclusion for opportunities above, unless the event is specifically about clean-cooking fuel or technology.
+- A narrow, single-fuel-type industry trade event (e.g. a generic LPG/"Liquid Gas Week"-style conference) that has no real connection to clean cooking, climate finance, or carbon markets.
+- A broad biodiversity/nature conservation POLICY summit (e.g. a CBD "COP") — only include nature/biodiversity events that are specifically about market mechanisms (credits, ecosystem-service markets), per the "nature / environmental markets" secondary topic above, not general conservation diplomacy.
 
 Respond with ONLY a JSON object (no markdown fences, no prose before or after) of the shape:
 {{ "candidates": [ {{ "kind": "opportunity" | "event", "title": string, "url": string, "why_relevant": string }} ] }}
@@ -194,13 +215,24 @@ Each item must have exactly these fields (use null for anything not stated — n
   "location": string | null,        // city/venue as stated, if any
   "geography": string | null,       // broad region
   "focus_areas": string[],          // choose from: clean energy, clean cooking, climate change, GHG reduction, energy transition, deforestation, manufacturing, women/gender, tech & innovation, engineering, AI/data
-  "description": string | null      // 1-2 sentence neutral summary of what the event is
+  "description": string | null,     // 1-2 sentence neutral summary of what the event is
+  "fit_analysis": string | null     // 2-4 sentences on why this event specifically is (or isn't) worth BURN's attendance — same idea as the "fit_analysis" field the opportunities pipeline writes, but framed around visibility/networking value rather than fundability
 }}}}
+
+Rules for "fit_analysis" (same spirit as the opportunities pipeline's, framed for an event rather than a funding call):
+- Write it as an analyst briefing the company's grants/BD team on whether attending is worthwhile, not marketing copy.
+- Reference concrete matching points from the company profile above where they apply: carbon finance/carbon markets relevance, clean cooking/energy-access relevance, geography overlap with BURN's countries of operation, or a plausible funder/investor/partner audience likely to be present.
+- If it's a stretch — very broad/generic conference, a geography with no overlap, or a niche adjacent to but not really about BURN's sectors — say so plainly rather than inflating it.
+- If the page gives too little detail to judge this, set the field to null rather than guessing.
 
 Return {{{{ "events": [] }}}} — i.e. extract nothing — if the page is:
 - Describing an event whose dates have clearly already passed.
 - Actually a funding/procurement opportunity rather than an event (a call for proposals, RFP, tender, etc.) — that belongs in the opportunities pipeline, not here.
 - Not actually describing a real, specific event (broken page, unrelated content, generic company homepage).
+- A generic diplomatic/policy commemoration, anniversary, or high-level UN meeting rather than an industry conference/expo/summit (e.g. a "High-Level Meeting to Commemorate the Nth Anniversary of [a Declaration]").
+- A general food-system, agriculture, or nutrition event, unless specifically about clean-cooking fuel or technology.
+- A narrow single-fuel-type trade event (e.g. a generic LPG/"Liquid Gas Week"-style conference) with no real connection to clean cooking, climate finance, or carbon markets.
+- A broad biodiversity/nature conservation policy summit (e.g. a CBD "COP") rather than one specifically about nature/biodiversity market mechanisms (credits, ecosystem-service markets).
 
 Otherwise extract exactly one item describing the event."""
 
@@ -421,7 +453,12 @@ def save_opportunity(fields: dict, candidate: dict) -> bool:
             "Content-Type": "application/json",
             "Prefer": "resolution=merge-duplicates,return=representation",
         },
-        params={"on_conflict": "content_hash"},
+        # title_key, not content_hash — see supabase/dedup_migration.sql. Two
+        # sources announcing the same call under different URLs now collapse
+        # into one row, and because `discarded` is absent from this payload,
+        # re-finding something the user discarded refreshes it without
+        # bringing it back to the Grant Scanner.
+        params={"on_conflict": "title_key"},
         json=[row],
         timeout=30,
     )
@@ -461,6 +498,7 @@ def save_event(fields: dict, candidate: dict) -> bool:
         "geography": fields.get("geography"),
         "focus_areas": fields.get("focus_areas") or [],
         "description": fields.get("description"),
+        "fit_analysis": fields.get("fit_analysis"),
         "url": url,
         "content_hash": content_hash(title, url),
         "source_type": "gemini",
@@ -475,7 +513,9 @@ def save_event(fields: dict, candidate: dict) -> bool:
             "Content-Type": "application/json",
             "Prefer": "resolution=merge-duplicates,return=representation",
         },
-        params={"on_conflict": "content_hash"},
+        # title_key, not content_hash — same reasoning as save_opportunity
+        # above, and the same discard-stickiness guarantee for the Events tab.
+        params={"on_conflict": "title_key"},
         json=[row],
         timeout=30,
     )

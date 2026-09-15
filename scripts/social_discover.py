@@ -583,7 +583,14 @@ def save_grant(fields: dict, post: dict) -> bool:
             "Content-Type": "application/json",
             "Prefer": "resolution=merge-duplicates,return=representation",
         },
-        params={"on_conflict": "content_hash"},
+        # See supabase/dedup_migration.sql: title_key is a normalised-title
+        # column with a unique index. Conflicting on it (rather than on
+        # content_hash = sha256(title || url)) means the same opportunity
+        # announced by two different funder pages collapses into one row
+        # instead of appearing twice. And since this payload never includes
+        # `discarded`, re-finding a discarded item refreshes it without
+        # un-discarding it.
+        params={"on_conflict": "title_key"},
         json=[row],
         timeout=30,
     )

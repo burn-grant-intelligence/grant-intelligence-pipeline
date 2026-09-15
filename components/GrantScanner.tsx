@@ -249,7 +249,11 @@ export default function GrantScanner() {
         </button>
       </section>
 
-      <div className="flex items-center justify-between text-sm text-[var(--ink-muted)]">
+      {/* This row sits directly on the page's background photo rather than
+          inside a white card, so --ink-muted (tuned for text on white) washes
+          out against it. White + medium weight + a soft shadow keeps it
+          legible over both the bright and dark parts of the image. */}
+      <div className="flex items-center justify-between text-sm font-medium text-white [text-shadow:0_1px_3px_rgb(0_0_0/0.45)]">
         <span>
           {sourceCount === null ? "…" : sourceCount} active source{sourceCount === 1 ? "" : "s"}
         </span>

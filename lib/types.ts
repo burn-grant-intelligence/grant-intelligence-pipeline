@@ -59,6 +59,7 @@ export interface EventItem {
   geography: string | null;
   focus_areas: string[];
   description: string | null;
+  fit_analysis: string | null;
   url: string | null;
   source_type: string | null;
   first_seen_at: string;

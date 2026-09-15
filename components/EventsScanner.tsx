@@ -141,7 +141,9 @@ export default function EventsScanner() {
         </div>
       </section>
 
-      <div className="flex items-center justify-between text-sm text-[var(--ink-muted)]">
+      {/* Same treatment as the Grant Scanner's count row — this sits on the
+          background photo, not on a card, so muted ink is unreadable here. */}
+      <div className="flex items-center justify-between text-sm font-medium text-white [text-shadow:0_1px_3px_rgb(0_0_0/0.45)]">
         <span>Upcoming, discovered by Gemini</span>
         <div className="flex items-center gap-3">
           <span>

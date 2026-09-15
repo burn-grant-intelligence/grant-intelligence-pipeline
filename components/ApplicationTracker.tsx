@@ -38,27 +38,11 @@ export default function ApplicationTracker() {
   }
 
   const counts = useMemo(() => {
-    const base: Record<string, number> = {
-      total: items.length,
-      in_progress: 0,
-      submitted: 0,
-      won: 0,
-      overdue: 0,
-    };
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
+    const base: Record<string, number> = { total: items.length, in_progress: 0, submitted: 0, won: 0 };
     for (const item of items) {
       if (["tracking", "researching", "drafting"].includes(item.status)) base.in_progress++;
       if (item.status === "submitted") base.submitted++;
       if (item.status === "won") base.won++;
-
-      const isOpen = !["won", "lost"].includes(item.status);
-      const deadline = item.grant?.deadline;
-      if (isOpen && deadline) {
-        const due = new Date(deadline);
-        if (!isNaN(due.getTime()) && due.getTime() < today.getTime()) base.overdue++;
-      }
     }
     return base;
   }, [items]);
@@ -78,50 +62,71 @@ export default function ApplicationTracker() {
     }
   }
 
-  async function removeItem(id: string, title: string) {
-    const confirmed = window.confirm(
-      `Remove "${title}" from your tracker? This can't be undone, but the opportunity will still be visible in the Grant Scanner if you want to re-add it later.`
-    );
-    if (!confirmed) return;
-
-    const { error: deleteError } = await supabase.from("tracker_items").delete().eq("id", id);
-    if (!deleteError) {
-      setItems((prev) => prev.filter((i) => i.id !== id));
-    } else {
-      setError(deleteError.message);
-    }
+  // Mirrors the SQL that generates grants.title_key in
+  // supabase/dedup_migration.sql: lowercase, then drop everything that isn't
+  // a letter or digit. Keep the two in sync — if the SQL normalisation ever
+  // changes, this must change with it.
+  function titleKeyOf(title: string) {
+    return title.toLowerCase().replace(/[^a-z0-9]+/g, "");
   }
 
   async function addManualGrant() {
-    if (!manualTitle.trim()) return;
-    const { data: grantRow, error: grantError } = await supabase
+    const title = manualTitle.trim();
+    if (!title) return;
+    setError(null);
+
+    // grants.title_key now has a unique index, so a plain insert would throw
+    // if this title already exists (e.g. the scanner already found it). Look
+    // for that existing row first and just track it, rather than erroring or
+    // creating the duplicate the index is there to prevent.
+    const { data: existing, error: lookupError } = await supabase
       .from("grants")
-      .insert({
-        title: manualTitle.trim(),
-        content_hash: `manual-${Date.now()}-${manualTitle.trim().toLowerCase()}`,
-      })
-      .select()
-      .single();
-    if (grantError || !grantRow) return;
+      .select("id")
+      .eq("title_key", titleKeyOf(title))
+      .maybeSingle();
+    if (lookupError) {
+      setError(lookupError.message);
+      return;
+    }
+
+    let grantId = existing?.id as string | undefined;
+
+    if (!grantId) {
+      const { data: grantRow, error: grantError } = await supabase
+        .from("grants")
+        .insert({
+          title,
+          content_hash: `manual-${Date.now()}-${title.toLowerCase()}`,
+        })
+        .select("id")
+        .single();
+      if (grantError || !grantRow) {
+        setError(grantError?.message ?? "Could not add that grant.");
+        return;
+      }
+      grantId = grantRow.id;
+    }
+
     const { error: trackerError } = await supabase.from("tracker_items").insert({
-      grant_id: grantRow.id,
+      grant_id: grantId,
       status: "tracking",
     });
-    if (!trackerError) {
-      setManualTitle("");
-      setAddingManual(false);
-      loadData();
+    if (trackerError) {
+      setError(trackerError.message);
+      return;
     }
+    setManualTitle("");
+    setAddingManual(false);
+    loadData();
   }
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <StatTile label="Total tracked" value={counts.total} color="text-neutral-800" />
         <StatTile label="In progress" value={counts.in_progress} color="text-neutral-800" />
         <StatTile label="Submitted" value={counts.submitted} color="text-neutral-800" />
         <StatTile label="Won 🎉" value={counts.won} color="text-emerald-600" />
-        <StatTile label="Overdue" value={counts.overdue} color="text-red-600" />
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -141,7 +146,7 @@ export default function ApplicationTracker() {
         </div>
         <button
           onClick={() => setAddingManual((v) => !v)}
-          className="rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--accent-dark)]"
+          className="rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-700"
         >
           + Add grant
         </button>
@@ -187,33 +192,19 @@ export default function ApplicationTracker() {
           >
             <div>
               <p className="font-medium text-neutral-800">{item.grant?.title ?? "(untitled grant)"}</p>
-              <div className="mt-1 flex flex-wrap items-center gap-2">
-                {item.grant?.funder && (
-                  <span className="text-sm text-neutral-500">{item.grant.funder}</span>
-                )}
-                <DeadlineBadge deadline={item.grant?.deadline} />
-              </div>
+              {item.grant?.funder && <p className="text-sm text-neutral-500">{item.grant.funder}</p>}
             </div>
-            <div className="flex items-center gap-3">
-              <select
-                value={item.status}
-                onChange={(e) => updateStatus(item.id, e.target.value as TrackerStatus)}
-                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
-              >
-                {TRACKER_STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {STATUS_LABELS[status]}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={() => removeItem(item.id, item.grant?.title ?? "this opportunity")}
-                className="text-sm font-medium text-neutral-400 hover:text-red-600"
-                title="Remove from tracker"
-              >
-                Remove
-              </button>
-            </div>
+            <select
+              value={item.status}
+              onChange={(e) => updateStatus(item.id, e.target.value as TrackerStatus)}
+              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+            >
+              {TRACKER_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {STATUS_LABELS[status]}
+                </option>
+              ))}
+            </select>
           </div>
         ))}
       </div>
@@ -239,48 +230,21 @@ function FilterPill({
   onClick: () => void;
   children: React.ReactNode;
 }) {
+  // Solid-fill pills, matching the "Focus areas" filters in GrantScanner and
+  // EventsScanner. The previous border-only style had no background, so an
+  // inactive pill was thin grey text floating directly on the background
+  // photo and was effectively invisible. An opaque pill reads clearly
+  // whatever happens to be behind it.
   return (
     <button
       onClick={onClick}
-      className={`rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+      className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
         active
-          ? "border-[var(--accent)] text-[var(--accent)]"
-          : "border-neutral-200 text-neutral-500 hover:border-neutral-300"
+          ? "bg-[var(--accent)] text-white"
+          : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
       }`}
     >
       {children}
     </button>
-  );
-}
-
-function DeadlineBadge({ deadline }: { deadline: string | null | undefined }) {
-  if (!deadline) return null;
-  const due = new Date(deadline);
-  if (isNaN(due.getTime())) return null;
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const diffDays = Math.ceil((due.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-
-  let label: string;
-  let toneClasses: string;
-  if (diffDays < 0) {
-    label = `Overdue by ${Math.abs(diffDays)}d`;
-    toneClasses = "border-red-200 bg-red-50 text-red-700";
-  } else if (diffDays === 0) {
-    label = "Due today";
-    toneClasses = "border-amber-200 bg-amber-50 text-amber-700";
-  } else if (diffDays <= 14) {
-    label = `Due in ${diffDays}d`;
-    toneClasses = "border-amber-200 bg-amber-50 text-amber-700";
-  } else {
-    label = `Due ${deadline}`;
-    toneClasses = "border-neutral-200 bg-neutral-50 text-neutral-500";
-  }
-
-  return (
-    <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${toneClasses}`}>
-      {label}
-    </span>
   );
 }

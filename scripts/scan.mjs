@@ -216,7 +216,13 @@ async function upsertGrant(fields, source, fallbackUrl) {
       content_hash,
       last_seen_at: new Date().toISOString(),
     },
-    { onConflict: "content_hash", ignoreDuplicates: false }
+    // Conflict on title_key (the normalised-title column added by
+    // supabase/dedup_migration.sql), NOT content_hash. content_hash is
+    // sha256(title || url), so the same opportunity found under a second URL
+    // used to slip through as a new row. title_key ignores the URL entirely.
+    // Because this payload never includes `discarded`, an upsert onto a row
+    // the user discarded refreshes its fields and leaves it discarded.
+    { onConflict: "title_key", ignoreDuplicates: false }
   );
 
   if (error) console.error(`  ! Supabase upsert failed for "${fields.title}":`, error.message);

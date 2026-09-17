@@ -271,8 +271,8 @@ async function scanSource(sourceRow) {
 }
 
 // --- Google Search discovery ---------------------------------------------------
-// Runs on EVERY scan (every 2 hours, weekdays — 12 runs/day), each time using a
-// rotating slice of a 70-query pool, so the day's ~72 searches (12 runs x 6)
+// Runs on EVERY scan (every 6 hours, weekdays — 4 runs/day), each time using a
+// rotating slice of a 70-query pool, so the day's ~24 searches (4 runs x 6)
 // cover broad, varied ground instead of repeating the same handful of searches.
 // Stays comfortably under Google's free 100-searches/day quota with buffer to
 // spare for manual test runs.
@@ -346,7 +346,13 @@ async function discoverCandidateUrls() {
   }
 
   const pool = buildQueryPool(); // 70 queries total
-  const runIndex = Math.floor(new Date().getUTCHours() / 2); // 0-11, one slot per scheduled run
+  // Divisor matches the cron schedule's run spacing (every 6 hours -> runs at
+  // UTC hours 0/6/12/18 -> runIndex 0-3, one slot per scheduled run) so the
+  // full pool gets walked in order rather than skipping slots. If the cron
+  // schedule in .github/workflows/daily-scan.yml ever changes, update this
+  // divisor to match (run spacing in hours), or query coverage will stall on
+  // a subset of the pool.
+  const runIndex = Math.floor(new Date().getUTCHours() / 6); // 0-3, one slot per scheduled run
   const start = (runIndex * QUERIES_PER_RUN) % pool.length;
 
   const queries = [];

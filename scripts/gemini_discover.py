@@ -111,6 +111,24 @@ SECONDARY_EVENT_TOPICS = [
     "Africa / emerging-market development",
 ]
 
+# Country priority order, per explicit user request — search (and the Events
+# tab displays) in this order, then broader Africa-wide events, then
+# international ones. Keep this list in sync with GEOGRAPHY_PRIORITY in
+# components/EventsScanner.tsx — same order, same reasoning.
+EVENT_GEOGRAPHY_PRIORITY = [
+    "Kenya",
+    "Tanzania",
+    "Ghana",
+    "Zambia",
+    "Nigeria",
+    "Malawi",
+    "Mozambique",
+    "Rwanda",
+    "Burundi",
+    "Ethiopia",
+    "Ivory Coast",
+]
+
 DISCOVERY_PROMPT = f"""Today's date is {TODAY.isoformat()}. Use Google Search to find CURRENTLY OPEN / UPCOMING items relevant to the company described below, across two SEPARATE categories, each with its OWN limit — filling one category does not reduce the other's limit.
 
 {BURN_PROFILE}
@@ -124,6 +142,13 @@ Search these PRIMARY topics thoroughly first — this is a high season for this 
 
 Once you've covered the primary topics well, use any remaining budget on these SECONDARY topics too — genuinely relevant secondary-topic events are still worth including, but don't let them crowd out primary-topic events if you have to choose:
 {chr(10).join(f"- {topic}" for topic in SECONDARY_EVENT_TOPICS)}
+
+GEOGRAPHIC PRIORITY — search for events in this order, and don't stop after the first country or two:
+1. Events actually held in, or specifically focused on, these countries, searched IN THIS EXACT ORDER — actively search for each one by name rather than only taking what turns up incidentally:
+{chr(10).join(f"   {i}. {country}" for i, country in enumerate(EVENT_GEOGRAPHY_PRIORITY, start=1))}
+2. Once those are covered, Africa-wide or multi-country African events (not tied to one specific country above).
+3. Only then, international / global events with no particular African focus.
+This ordering is about search priority and effort, not a hard filter — a strong international event is still worth including, just after you've made a genuine effort on 1 and 2 above.
 
 Do NOT include, even if a keyword above technically matches:
 - Generic diplomatic/policy commemorations, anniversaries, or high-level UN meetings that aren't a concrete industry conference/expo/summit a company would actually attend for business purposes (e.g. "High-Level Meeting to Commemorate the Nth Anniversary of [a Declaration]").

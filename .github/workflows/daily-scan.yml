@@ -2,10 +2,12 @@ name: Grant scan
 
 on:
   schedule:
-    # Every 6 hours, Monday-Friday only (UTC) — reduced from every 2 hours per
-    # explicit user request. Comfortably within GitHub's free private-repo
-    # Actions minutes at this frequency — see README for the math.
-    - cron: '0 */6 * * 1-5'
+    # Every 8 hours, Monday-Friday only (UTC) — reduced from every 6 hours
+    # (itself reduced from every 2 hours) per explicit user request, to leave
+    # each run a bigger slice of Groq's shared 200K-tokens/day budget — see
+    # MAX_GROQ_TOKENS_PER_RUN in scripts/scan.mjs. Comfortably within GitHub's
+    # free private-repo Actions minutes at this frequency — see README.
+    - cron: '0 */8 * * 1-5'
   workflow_dispatch: {} # lets you trigger a scan manually from the Actions tab
 
 jobs:

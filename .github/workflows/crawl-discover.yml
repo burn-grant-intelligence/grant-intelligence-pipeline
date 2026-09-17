@@ -2,7 +2,7 @@ name: Crawl discovery
 
 # Walks a rotating subset of funder sites looking for open calls, and queues the
 # URLs it finds into Supabase for the main scan to pick up. Runs once a day —
-# separate from the main scan, which runs every 2 hours.
+# separate from the main scan, which runs every 6 hours.
 
 on:
   schedule:

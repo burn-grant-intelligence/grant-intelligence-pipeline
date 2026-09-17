@@ -4,6 +4,62 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { FOCUS_AREAS, EventItem } from "@/lib/types";
 
+// Explicit country priority order, per user request: search and display
+// results in this order, then broader Africa-wide events, then everything
+// international. Order matters — keep this in sync with the matching list in
+// scripts/gemini_discover.py's DISCOVERY_PROMPT, which searches in this same
+// sequence.
+const GEOGRAPHY_PRIORITY = [
+  "Kenya",
+  "Tanzania",
+  "Ghana",
+  "Zambia",
+  "Nigeria",
+  "Malawi",
+  "Mozambique",
+  "Rwanda",
+  "Burundi",
+  "Ethiopia",
+  "Ivory Coast",
+];
+
+// event.geography is free text (whatever Gemini/LinkedIn extracted), not a
+// controlled list, so a country can show up under more than one spelling.
+const GEOGRAPHY_ALIASES: Record<string, string[]> = {
+  "Ivory Coast": ["côte d'ivoire", "cote d'ivoire", "cote divoire"],
+};
+
+const GEOGRAPHY_FILTER_OPTIONS = [
+  "Any geography",
+  ...GEOGRAPHY_PRIORITY,
+  "Africa (general)",
+  "International",
+];
+
+const EVENT_TYPE_OPTIONS = ["Any type", "Conference", "Summit", "Forum", "Webinar", "Workshop", "Trade show"];
+const FORMAT_OPTIONS = ["Any format", "Virtual", "In-person", "Hybrid"];
+
+// Lower = higher priority. A named priority country first (in the order
+// above), then anything else that mentions Africa generally, then
+// international/unstated last.
+function geographyRank(geo: string | null): number {
+  const g = (geo ?? "").toLowerCase();
+  for (let i = 0; i < GEOGRAPHY_PRIORITY.length; i++) {
+    const country = GEOGRAPHY_PRIORITY[i];
+    const aliases = GEOGRAPHY_ALIASES[country] ?? [];
+    if (g.includes(country.toLowerCase()) || aliases.some((a) => g.includes(a))) return i;
+  }
+  if (g.includes("africa")) return GEOGRAPHY_PRIORITY.length;
+  return GEOGRAPHY_PRIORITY.length + 1;
+}
+
+function matchesGeographyFilter(geo: string | null, filter: string): boolean {
+  if (filter === GEOGRAPHY_FILTER_OPTIONS[0]) return true;
+  if (filter === "International") return geographyRank(geo) === GEOGRAPHY_PRIORITY.length + 1;
+  if (filter === "Africa (general)") return geographyRank(geo) === GEOGRAPHY_PRIORITY.length;
+  return geographyRank(geo) === GEOGRAPHY_PRIORITY.indexOf(filter);
+}
+
 // Deliberately its own tab, separate from the Grant Scanner's opportunity
 // list — these are calendar/networking items (conferences, summits,
 // webinars), not funding calls to apply to, and this is a lighter side
@@ -15,6 +71,9 @@ export default function EventsScanner() {
   const [error, setError] = useState<string | null>(null);
 
   const [activeFocusAreas, setActiveFocusAreas] = useState<string[]>([]);
+  const [geographyFilter, setGeographyFilter] = useState(GEOGRAPHY_FILTER_OPTIONS[0]);
+  const [eventTypeFilter, setEventTypeFilter] = useState(EVENT_TYPE_OPTIONS[0]);
+  const [formatFilter, setFormatFilter] = useState(FORMAT_OPTIONS[0]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [discardingId, setDiscardingId] = useState<string | null>(null);
 
@@ -67,18 +126,33 @@ export default function EventsScanner() {
   }
 
   const filteredEvents = useMemo(() => {
-    return events.filter((e) => {
-      if (isDiscarded(e)) return false;
-      if (isPast(e)) return false;
-      if (activeFocusAreas.length > 0) {
-        const overlap = e.focus_areas?.some((a) =>
-          activeFocusAreas.some((active) => normalizeTag(a) === normalizeTag(active))
-        );
-        if (!overlap) return false;
-      }
-      return true;
-    });
-  }, [events, activeFocusAreas]);
+    return events
+      .filter((e) => {
+        if (isDiscarded(e)) return false;
+        if (isPast(e)) return false;
+        if (activeFocusAreas.length > 0) {
+          const overlap = e.focus_areas?.some((a) =>
+            activeFocusAreas.some((active) => normalizeTag(a) === normalizeTag(active))
+          );
+          if (!overlap) return false;
+        }
+        if (!matchesGeographyFilter(e.geography, geographyFilter)) return false;
+        if (eventTypeFilter !== EVENT_TYPE_OPTIONS[0]) {
+          if (!e.event_type || !e.event_type.toLowerCase().includes(eventTypeFilter.toLowerCase())) return false;
+        }
+        if (formatFilter !== FORMAT_OPTIONS[0]) {
+          if (!e.format || !e.format.toLowerCase().includes(formatFilter.toLowerCase())) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        // Priority countries first (in GEOGRAPHY_PRIORITY order), then
+        // Africa-general, then international — soonest date within each tier.
+        const rankDiff = geographyRank(a.geography) - geographyRank(b.geography);
+        if (rankDiff !== 0) return rankDiff;
+        return (a.start_date ?? "9999").localeCompare(b.start_date ?? "9999");
+      });
+  }, [events, activeFocusAreas, geographyFilter, eventTypeFilter, formatFilter]);
 
   async function discardEvent(event: EventItem) {
     if (!window.confirm(`Discard "${event.title}"? It will stop showing up in this list.`)) return;
@@ -141,10 +215,51 @@ export default function EventsScanner() {
         </div>
       </section>
 
+      <section className="flex flex-wrap items-end justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
+        <div className="flex flex-wrap gap-6">
+          <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-[var(--ink-muted)]">
+            Geography
+            <select
+              value={geographyFilter}
+              onChange={(e) => setGeographyFilter(e.target.value)}
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-800"
+            >
+              {GEOGRAPHY_FILTER_OPTIONS.map((opt) => (
+                <option key={opt}>{opt}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-[var(--ink-muted)]">
+            Event type
+            <select
+              value={eventTypeFilter}
+              onChange={(e) => setEventTypeFilter(e.target.value)}
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-800"
+            >
+              {EVENT_TYPE_OPTIONS.map((opt) => (
+                <option key={opt}>{opt}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-[var(--ink-muted)]">
+            Format
+            <select
+              value={formatFilter}
+              onChange={(e) => setFormatFilter(e.target.value)}
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-800"
+            >
+              {FORMAT_OPTIONS.map((opt) => (
+                <option key={opt}>{opt}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </section>
+
       {/* Same treatment as the Grant Scanner's count row — this sits on the
           background photo, not on a card, so muted ink is unreadable here. */}
       <div className="flex items-center justify-between text-sm font-medium text-white [text-shadow:0_1px_3px_rgb(0_0_0/0.45)]">
-        <span>Upcoming, discovered by Gemini</span>
+        <span>Upcoming events</span>
         <div className="flex items-center gap-3">
           <span>
             {loading ? "Loading…" : `${filteredEvents.length} upcoming event${filteredEvents.length === 1 ? "" : "s"}`}

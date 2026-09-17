@@ -106,10 +106,17 @@ PRIMARY_EVENT_TOPICS = [
 SECONDARY_EVENT_TOPICS = [
     "climate technology and innovation",
     "impact investment",
-    "nature / environmental markets (e.g. carbon credits, biodiversity credits, ecosystem-service markets — market mechanisms, not general conservation policy)",
     "gender and inclusive development",
     "Africa / emerging-market development",
 ]
+# Removed "nature / environmental markets (carbon credits, biodiversity
+# credits, ecosystem-service markets)" per explicit user feedback after
+# reviewing actual Events tab results — even framed around "market
+# mechanisms," this topic was the direct source of biodiversity/conservation
+# events slipping through. Biodiversity is a different focus area from
+# BURN's clean cooking / carbon-market-for-cookstoves business; see the
+# blanket biodiversity exclusion below, which now excludes it regardless of
+# framing rather than only excluding "conservation policy" summits.
 
 # Country priority order, per explicit user request — search (and the Events
 # tab displays) in this order, then broader Africa-wide events, then
@@ -151,10 +158,11 @@ GEOGRAPHIC PRIORITY — search for events in this order, and don't stop after th
 This ordering is about search priority and effort, not a hard filter — a strong international event is still worth including, just after you've made a genuine effort on 1 and 2 above.
 
 Do NOT include, even if a keyword above technically matches:
-- Generic diplomatic/policy commemorations, anniversaries, or high-level UN meetings that aren't a concrete industry conference/expo/summit a company would actually attend for business purposes (e.g. "High-Level Meeting to Commemorate the Nth Anniversary of [a Declaration]").
+- Generic diplomatic/policy commemorations, anniversaries, or broad multilateral/macroeconomic summits that aren't a concrete clean-energy/climate/carbon-markets industry conference a company would actually attend for business purposes — e.g. a "High-Level Meeting to Commemorate the Nth Anniversary of [a Declaration]", the IMF/World Bank Annual Meetings, WEF Davos, or a G7/G20 finance-ministers meeting. These technically touch "development finance" but are broad global-economy events, not a clean cooking/climate/carbon-markets industry event.
 - General food-system, agriculture, or nutrition events (e.g. a "World Food Forum") — same rationale as the agriculture exclusion for opportunities above, unless the event is specifically about clean-cooking fuel or technology.
-- A narrow, single-fuel-type industry trade event (e.g. a generic LPG/"Liquid Gas Week"-style conference) that has no real connection to clean cooking, climate finance, or carbon markets.
-- A broad biodiversity/nature conservation POLICY summit (e.g. a CBD "COP") — only include nature/biodiversity events that are specifically about market mechanisms (credits, ecosystem-service markets), per the "nature / environmental markets" secondary topic above, not general conservation diplomacy.
+- A narrow, single-fuel-or-technology industry trade event with no real connection to clean cooking, climate finance, or carbon markets — e.g. a generic LPG/"Liquid Gas Week"-style conference, or a solar-power/photovoltaic-specific event (e.g. "Solar Power Africa", "Intersolar"). BURN's core products are cooking appliances (LPG, biomass, electric induction, ethanol, charcoal) and carbon credits, not solar power generation — a solar-only event is a different niche even though solar is adjacent "clean energy".
+- Anything primarily about biodiversity, ecosystem services, or nature conservation — even if it uses market/credit language (e.g. "biodiversity credits"). This is a different focus area from BURN's clean cooking and carbon-market business; exclude it regardless of framing, not just general-conservation-policy summits.
+- A carbon-markets/climate/energy event that is explicitly regional to a single NON-African market with no stated Africa or emerging-market relevance — e.g. "Carbon Unbound North America", a US- or EU-only carbon-trading conference. BURN's operations, carbon projects, and target audience are Africa-based, so a region-locked non-Africa event has little practical value even when the sector matches exactly. This is different from a genuinely global/international event (e.g. a worldwide climate summit) — the geographic-priority note above already says those are still fine to include, just lower priority than Africa-focused ones.
 
 Respond with ONLY a JSON object (no markdown fences, no prose before or after) of the shape:
 {{ "candidates": [ {{ "kind": "opportunity" | "event", "title": string, "url": string, "why_relevant": string }} ] }}
@@ -254,10 +262,11 @@ Return {{{{ "events": [] }}}} — i.e. extract nothing — if the page is:
 - Describing an event whose dates have clearly already passed.
 - Actually a funding/procurement opportunity rather than an event (a call for proposals, RFP, tender, etc.) — that belongs in the opportunities pipeline, not here.
 - Not actually describing a real, specific event (broken page, unrelated content, generic company homepage).
-- A generic diplomatic/policy commemoration, anniversary, or high-level UN meeting rather than an industry conference/expo/summit (e.g. a "High-Level Meeting to Commemorate the Nth Anniversary of [a Declaration]").
+- A generic diplomatic/policy commemoration, anniversary, or broad multilateral/macroeconomic summit rather than a concrete clean-energy/climate/carbon-markets industry conference — e.g. a "High-Level Meeting to Commemorate the Nth Anniversary of [a Declaration]", the IMF/World Bank Annual Meetings, WEF Davos, or a G7/G20 finance-ministers meeting.
 - A general food-system, agriculture, or nutrition event, unless specifically about clean-cooking fuel or technology.
-- A narrow single-fuel-type trade event (e.g. a generic LPG/"Liquid Gas Week"-style conference) with no real connection to clean cooking, climate finance, or carbon markets.
-- A broad biodiversity/nature conservation policy summit (e.g. a CBD "COP") rather than one specifically about nature/biodiversity market mechanisms (credits, ecosystem-service markets).
+- A narrow single-fuel-or-technology trade event with no real connection to clean cooking, climate finance, or carbon markets — e.g. a generic LPG/"Liquid Gas Week"-style conference, or a solar-power/photovoltaic-specific event ("Solar Power Africa", "Intersolar" and similar).
+- Anything primarily about biodiversity, ecosystem services, or nature conservation — even if it uses market/credit language (e.g. "biodiversity credits"). Exclude regardless of framing, not just general-conservation-policy summits.
+- A carbon-markets/climate/energy event explicitly regional to a single NON-African market with no stated Africa or emerging-market relevance (e.g. "Carbon Unbound North America", a US- or EU-only carbon-trading conference) — different from a genuinely global/international event, which is still fine.
 
 Otherwise extract exactly one item describing the event."""
 

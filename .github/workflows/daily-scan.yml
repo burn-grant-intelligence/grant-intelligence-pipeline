@@ -2,9 +2,10 @@ name: Grant scan
 
 on:
   schedule:
-    # Every 2 hours, Monday-Friday only (UTC). Comfortably within GitHub's free
-    # private-repo Actions minutes at this frequency — see README for the math.
-    - cron: '0 */2 * * 1-5'
+    # Every 6 hours, Monday-Friday only (UTC) — reduced from every 2 hours per
+    # explicit user request. Comfortably within GitHub's free private-repo
+    # Actions minutes at this frequency — see README for the math.
+    - cron: '0 */6 * * 1-5'
   workflow_dispatch: {} # lets you trigger a scan manually from the Actions tab
 
 jobs:
@@ -15,7 +16,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
           cache: 'npm'
 
       - name: Install dependencies
@@ -29,6 +30,12 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # Powers scan.mjs's Google Search discovery step (a rotating pool of
+          # program+geography queries run on every scan, meant to find new
+          # candidates beyond the fixed `sources` table). If these two secrets
+          # aren't set in this repo yet, scan.mjs degrades gracefully — it logs
+          # "Google Search not configured — skipping discovery" and just scans
+          # the fixed sources as before. See README for how to create them.
           GOOGLE_SEARCH_API_KEY: ${{ secrets.GOOGLE_SEARCH_API_KEY }}
           GOOGLE_SEARCH_CX: ${{ secrets.GOOGLE_SEARCH_CX }}
         run: node scripts/scan.mjs

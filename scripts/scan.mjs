@@ -110,23 +110,87 @@ function looksLikeAwardNews(title) {
   return AWARD_NEWS_PATTERN.test(title.trim());
 }
 
+// --- Groq token-budget guard ------------------------------------------------
+// Groq's free tier for openai/gpt-oss-20b caps usage at 200,000 tokens/DAY,
+// org-wide (shared with scripts/social_discover.py, which also uses Groq) —
+// see console.groq.com/docs/rate-limits. A single run of this script can
+// easily want 60+ extraction calls (~24 fixed sources + up to 30 Google
+// Search discoveries + up to 12 crawl-queue URLs), each costing roughly
+// 1,500-7,500 tokens observed in practice. That means one run alone can burn
+// the ENTIRE day's budget — which is exactly what happened on 2026-09-17
+// (see grant-intelligence-pipeline-status.md in the project): the first 2-3
+// sources in that run's log used up what little budget was left over from
+// earlier that day, then every remaining source failed with a "tokens per
+// day (TPD)" 429, logged once per source for the rest of the run.
+//
+// Two guards below fix this:
+// 1. MAX_GROQ_TOKENS_PER_RUN — a conservative self-imposed ceiling so ONE run
+//    can't hog the whole day's supply, leaving room for this script's other
+//    runs that day and for social_discover.py's own (twice-weekly) usage.
+// 2. If Groq itself still returns a real TPD 429 (meaning the guard above
+//    under-estimated — e.g. an earlier run today already spent budget this
+//    process doesn't know about, which is the common case), stop the ENTIRE
+//    rest of this run immediately rather than looping through every
+//    remaining source/candidate and logging the same failure dozens of
+//    times — a TPD limit is org-wide and won't clear for minutes at best.
+const MAX_GROQ_TOKENS_PER_RUN = 45000; // ~1/4.5 of the daily cap per run (3 runs/day, reduced from 4 on 2026-09-17 per user request) with headroom left for social_discover.py's twice-weekly share
+const GROQ_MAX_COMPLETION_TOKENS = 2048; // trimmed from 3072 — most pages yield 0-2 grants; frees up headroom under the shared 200K/day cap
+const GROQ_INPUT_CHAR_LIMIT = 10000; // trimmed from 15000 — same reasoning; the actual call details are almost always near the top of a page's visible text
+let estimatedTokensUsedThisRun = 0;
+let stopGroqCallsThisRun = false; // once true (soft budget hit, or a real TPD 429), no more Groq calls are attempted for the rest of this process
+
+// Rough, deliberately conservative token estimate (chars/4, a standard rule of
+// thumb) — only needs to be in the right ballpark to decide whether this run
+// can still afford another call, not exact. Real usage (from Groq's response)
+// is used instead whenever it's available.
+function estimateCallTokens(systemPrompt, userText, maxCompletionTokens) {
+  return Math.ceil((systemPrompt.length + userText.length) / 4) + maxCompletionTokens;
+}
+
+function looksLikeTpdError(message) {
+  return typeof message === "string" && /tokens per day \(tpd\)/i.test(message);
+}
+
 async function extractGrants(rawText) {
+  if (stopGroqCallsThisRun) return [];
+
+  const userText = rawText.slice(0, GROQ_INPUT_CHAR_LIMIT);
+  const estimate = estimateCallTokens(EXTRACTION_SYSTEM_PROMPT, userText, GROQ_MAX_COMPLETION_TOKENS);
+
+  if (estimatedTokensUsedThisRun + estimate > MAX_GROQ_TOKENS_PER_RUN) {
+    console.log(
+      `  - Skipping Groq extraction (would exceed this run's ${MAX_GROQ_TOKENS_PER_RUN}-token budget) — this page will be picked up on a future run.`
+    );
+    stopGroqCallsThisRun = true;
+    return [];
+  }
+
   let text = "";
   try {
     const completion = await groq.chat.completions.create({
       model: GROQ_MODEL,
       reasoning_effort: "low", // this is a reasoning model; keep it light for a simple extraction task
-      max_completion_tokens: 3072,
+      max_completion_tokens: GROQ_MAX_COMPLETION_TOKENS,
       messages: [
         { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
-        { role: "user", content: rawText.slice(0, 15000) },
+        { role: "user", content: userText },
       ],
     });
     text = completion.choices[0]?.message?.content ?? "{}";
+    estimatedTokensUsedThisRun += completion.usage?.total_tokens ?? estimate;
   } catch (err) {
     // Network error, rate limit, or the model/provider itself erroring out —
     // log and skip this one page rather than crashing the whole scan run.
     console.error("  ! Groq request failed:", err.message);
+    estimatedTokensUsedThisRun += estimate;
+    if (looksLikeTpdError(err.message)) {
+      console.error(
+        "  ! Groq's daily token budget (TPD) is exhausted org-wide — stopping the rest of this run instead of " +
+          "repeating this same failure for every remaining source/candidate. It resets on Groq's own schedule " +
+          "(see the retry-after estimate in the error above) and the next scheduled run will pick up where this one left off."
+      );
+      stopGroqCallsThisRun = true;
+    }
     return [];
   }
 
@@ -253,11 +317,12 @@ async function scanSource(sourceRow) {
   }
 
   for (const candidate of candidates) {
+    if (stopGroqCallsThisRun) break; // budget guard tripped mid-source (mainly relevant for RSS sources with many items)
     const extracted = await extractGrants(candidate.rawText);
     for (const fields of extracted) {
       await upsertGrant(fields, sourceRow, candidate.fallbackUrl);
     }
-    await sleep(1500); // stay comfortably under Groq's free-tier rate limit
+    await sleep(1500); // stay comfortably under Groq's free-tier per-minute rate limit
   }
 
   await supabase
@@ -271,8 +336,8 @@ async function scanSource(sourceRow) {
 }
 
 // --- Google Search discovery ---------------------------------------------------
-// Runs on EVERY scan (every 6 hours, weekdays — 4 runs/day), each time using a
-// rotating slice of a 70-query pool, so the day's ~24 searches (4 runs x 6)
+// Runs on EVERY scan (every 8 hours, weekdays — 3 runs/day), each time using a
+// rotating slice of a 70-query pool, so the day's ~18 searches (3 runs x 6)
 // cover broad, varied ground instead of repeating the same handful of searches.
 // Stays comfortably under Google's free 100-searches/day quota with buffer to
 // spare for manual test runs.
@@ -346,13 +411,13 @@ async function discoverCandidateUrls() {
   }
 
   const pool = buildQueryPool(); // 70 queries total
-  // Divisor matches the cron schedule's run spacing (every 6 hours -> runs at
-  // UTC hours 0/6/12/18 -> runIndex 0-3, one slot per scheduled run) so the
+  // Divisor matches the cron schedule's run spacing (every 8 hours -> runs at
+  // UTC hours 0/8/16 -> runIndex 0-2, one slot per scheduled run) so the
   // full pool gets walked in order rather than skipping slots. If the cron
   // schedule in .github/workflows/daily-scan.yml ever changes, update this
   // divisor to match (run spacing in hours), or query coverage will stall on
   // a subset of the pool.
-  const runIndex = Math.floor(new Date().getUTCHours() / 6); // 0-3, one slot per scheduled run
+  const runIndex = Math.floor(new Date().getUTCHours() / 8); // 0-2, one slot per scheduled run
   const start = (runIndex * QUERIES_PER_RUN) % pool.length;
 
   const queries = [];
@@ -466,6 +531,21 @@ async function scanQueuedUrl(row) {
   await sleep(1500);
 }
 
+// Rotates which sources get scanned first each run, based on the current
+// 8-hour slot (matching the cron schedule), so a Groq budget shortfall in one
+// run doesn't always starve the same handful of sources. Without this,
+// Supabase returns `sources` rows in roughly insertion order, so the oldest
+// rows would always get first crack at a scarce, often-exhausted daily Groq
+// budget and newly-added sources (e.g. the 5 added on 2026-09-17) could go
+// unscanned indefinitely. Same rotation idiom as discoverCandidateUrls' query
+// pool below — deterministic from the clock, no extra DB state needed. If the
+// cron schedule's run spacing ever changes, update this divisor to match.
+function rotateForThisRun(list) {
+  if (!list.length) return list;
+  const slot = Math.floor(Date.now() / (8 * 60 * 60 * 1000)) % list.length;
+  return [...list.slice(slot), ...list.slice(0, slot)];
+}
+
 // --- Main loop -------------------------------------------------------------------
 
 async function main() {
@@ -473,25 +553,42 @@ async function main() {
   if (error) throw error;
 
   if (sources && sources.length) {
-    for (const source of sources) {
-      await scanSource(source);
+    const rotated = rotateForThisRun(sources);
+    for (let i = 0; i < rotated.length; i++) {
+      if (stopGroqCallsThisRun) {
+        console.log(
+          `Groq budget guard triggered — skipping the remaining ${rotated.length - i} fixed source(s) for this run.`
+        );
+        break;
+      }
+      await scanSource(rotated[i]);
     }
   } else {
     console.log("No active sources configured. Add rows to the `sources` table in Supabase.");
   }
 
-  console.log("Running Google Search discovery...");
-  const discovered = await discoverCandidateUrls();
-  console.log(`Found ${discovered.length} new candidate page(s) to check.`);
-  for (const candidate of discovered) {
-    await scanDiscoveredUrl(candidate);
+  if (stopGroqCallsThisRun) {
+    console.log("Skipping Google Search discovery this run — Groq's daily budget is already exhausted.");
+  } else {
+    console.log("Running Google Search discovery...");
+    const discovered = await discoverCandidateUrls();
+    console.log(`Found ${discovered.length} new candidate page(s) to check.`);
+    for (const candidate of discovered) {
+      if (stopGroqCallsThisRun) break;
+      await scanDiscoveredUrl(candidate);
+    }
   }
 
-  console.log("Processing crawl-discovered URLs...");
-  const queued = await fetchCrawlQueue();
-  console.log(`${queued.length} crawl-queued URL(s) to check.`);
-  for (const row of queued) {
-    await scanQueuedUrl(row);
+  if (stopGroqCallsThisRun) {
+    console.log("Skipping crawl-queue processing this run — Groq's daily budget is already exhausted.");
+  } else {
+    console.log("Processing crawl-discovered URLs...");
+    const queued = await fetchCrawlQueue();
+    console.log(`${queued.length} crawl-queued URL(s) to check.`);
+    for (const row of queued) {
+      if (stopGroqCallsThisRun) break;
+      await scanQueuedUrl(row);
+    }
   }
 
   console.log("Done.");

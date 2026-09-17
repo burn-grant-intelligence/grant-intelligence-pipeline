@@ -281,7 +281,7 @@ export default function EventsScanner() {
 
       {!loading && !error && filteredEvents.length === 0 && (
         <div className="rounded-lg border border-dashed border-neutral-300 bg-[var(--surface)] p-10 text-center text-[var(--ink-muted)]">
-          No upcoming events yet. Once scripts/gemini_discover.py runs, matching events will show up
+          No upcoming events yet. Once the discovery tool runs, matching events will show up
           here.
         </div>
       )}

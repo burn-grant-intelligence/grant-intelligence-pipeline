@@ -16,7 +16,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22+, not 20 — @supabase/supabase-js 2.x's bundled realtime-js now
+          # requires a native WebSocket implementation (built into Node 22+)
+          # unless one is supplied manually, and throws at client-construction
+          # time on Node 20/21 even though this script never uses realtime
+          # features at all (it's pure REST via .from()...select/insert/upsert).
+          node-version: 22
           cache: 'npm'
 
       - name: Install dependencies

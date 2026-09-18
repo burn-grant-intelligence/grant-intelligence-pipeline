@@ -146,11 +146,16 @@ export default function EventsScanner() {
         return true;
       })
       .sort((a, b) => {
-        // Priority countries first (in GEOGRAPHY_PRIORITY order), then
-        // Africa-general, then international — soonest date within each tier.
-        const rankDiff = geographyRank(a.geography) - geographyRank(b.geography);
-        if (rankDiff !== 0) return rankDiff;
-        return (a.start_date ?? "9999").localeCompare(b.start_date ?? "9999");
+        // Chronological (soonest first) is now the PRIMARY sort, per explicit
+        // user request — sorting by country priority first was causing events
+        // to appear "mixed up" out of date order (a lower-priority country's
+        // event could show above one happening sooner). Country priority
+        // still governs search/discovery order (see gemini_discover.py) and
+        // the Geography filter dropdown; here it's only a tiebreaker for
+        // events that share the exact same date (or both lack one).
+        const dateDiff = (a.start_date ?? "9999").localeCompare(b.start_date ?? "9999");
+        if (dateDiff !== 0) return dateDiff;
+        return geographyRank(a.geography) - geographyRank(b.geography);
       });
   }, [events, activeFocusAreas, geographyFilter, eventTypeFilter, formatFilter]);
 

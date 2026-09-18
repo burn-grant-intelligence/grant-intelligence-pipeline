@@ -69,6 +69,13 @@ GEMINI_MODEL = "gemini-2.5-flash"
 MAX_OPPORTUNITIES_PER_RUN = 15
 MAX_EVENTS_PER_RUN = 25
 
+# A fixed-source page (see FIXED_OPPORTUNITY_SOURCES below) can be a listing
+# of several distinct open calls rather than a single opportunity — this
+# caps how many of those Gemini may extract from any one page in a single
+# call, so a large listing page can't blow up run time or produce a wall of
+# near-duplicate items.
+MAX_ITEMS_PER_OPPORTUNITY_PAGE = 5
+
 GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_BACKOFF_SECONDS = 20  # fallback wait if no retry hint is available
 GEMINI_PACING_SECONDS = 2.0        # deliberate pause between extraction calls
@@ -86,6 +93,44 @@ BURN_PROFILE = """BURN Manufacturing — company profile for grant-fit assessmen
 - Funding BURN typically seeks: grants, catalytic/concessional funding, results-based financing, R&D funding, and scale-up/working capital. BURN is generally NOT a fit for micro-loans or funding explicitly reserved for small/early-stage/first-time operators.
 - Strong-fit program patterns: results-based financing (RBF) programs for clean cooking, calls for proposals / "Call4Solutions" / tenders specifically for cookstove distribution or manufacturing, institutional and school-cooking programs, and higher-tier/modern eCooking scale-up programs.
 - Agriculture is generally NOT a fit: BURN is a clean cookstove company, not an agriculture company. Funding primarily for on-farm equipment, agricultural inputs, crop or livestock production, agri-processing, or farm-level energy systems is a poor fit — even if it touches climate or energy — UNLESS it specifically funds clean cookstove manufacturing or distribution."""
+
+# Specific funder/program pages BURN wants checked on every single run,
+# rather than left to chance via discover_candidates()'s broad Google-search
+# grounding above — a niche funder's own page may simply never surface for
+# generic topic searches even when it's a strong, known fit. Added
+# 2026-09-18 per user request, mirroring the fixed `sources` table
+# scan.mjs/crawl_discover.py already read from for the Groq pipeline; this
+# is the Gemini pipeline's own small, hardcoded equivalent.
+#
+# Unlike discover_candidates()'s results, these are NOT filtered by
+# seen_urls() in main() — they're re-extracted every run, since the page
+# itself can change over time (a listing page gaining a new call, a
+# single-call page's deadline moving). The title-based dedup in
+# save_opportunity() (on_conflict=title_key) already prevents an unchanged,
+# already-saved opportunity from duplicating — it just refreshes
+# last_seen_at.
+#
+# Each entry's "title" is a human label for logging, not literally the
+# expected opportunity's title — extract_opportunity()'s prompt treats it as
+# a loose hint the way it already does for discover_candidates()'s guesses.
+FIXED_OPPORTUNITY_SOURCES = [
+    {
+        "title": "Africa-Europe Innovation Platform — Funding Opportunities",
+        "url": "https://www.africaeuropeinnovation.net/funding-opportunities/",
+    },
+    {
+        "title": "LEAP ENERGY — AU-EU Partnership Call for Funding",
+        "url": "https://leap-energy.eu/call-funding",
+    },
+    {
+        "title": "Mitigation Action Facility — Call for Projects 2026",
+        "url": "https://mitigation-action.org/call-for-projects-2026/#application",
+    },
+    {
+        "title": "FOREST Partnership — FOREST Pathways Joint Call 2026",
+        "url": "https://forest-partnership.eu/jointcall2026/",
+    },
+]
 
 # Deliberately broader than BURN_PROFILE's own fit criteria — events are a
 # lightweight visibility/networking feature, not something that needs to
@@ -223,7 +268,7 @@ Return {{{{ "grants": [] }}}} — i.e. extract nothing — if the page is:
 - Primarily an agriculture, forestry or land-use opportunity, even where climate or energy is mentioned.
 - Not actually a funding/procurement opportunity at all (e.g. the page turned out to be unrelated, broken, or paywalled with no visible content).
 
-Otherwise extract exactly one item describing the opportunity."""
+If the page describes a single opportunity, extract exactly that one item. If the page is instead a LISTING or INDEX of several distinct open opportunities — e.g. a funder's "current calls" or "funding opportunities" page linking out to multiple separate programs — extract EACH genuinely distinct, currently-open one as its own separate item in the "grants" array, up to a maximum of {MAX_ITEMS_PER_OPPORTUNITY_PAGE} items. Do not merge separate calls into one summary item, and do not invent items beyond what the page actually lists; if there are more distinct calls than the maximum, keep the ones that best fit the company profile above."""
 
 EVENT_EXTRACTION_PROMPT_TEMPLATE = f"""Read the page at the URL below using your url_context tool, then extract structured details about the industry event it describes.
 
@@ -364,7 +409,12 @@ def discover_candidates() -> list[dict]:
     return opportunities + events
 
 
-def extract_opportunity(candidate: dict) -> dict | None:
+def extract_opportunity(candidate: dict) -> list[dict]:
+    """Returns the extracted opportunity field-dicts found on this page —
+    almost always zero or one, but can be several when the page turns out to
+    be a listing/index of multiple distinct open calls (see
+    MAX_ITEMS_PER_OPPORTUNITY_PAGE and the prompt's own instructions above).
+    An empty list means nothing extractable, not an error."""
     prompt = OPPORTUNITY_EXTRACTION_PROMPT_TEMPLATE.format(
         url=candidate["url"], title=candidate["title"]
     )
@@ -373,12 +423,12 @@ def extract_opportunity(candidate: dict) -> dict | None:
         types.Tool(google_search=types.GoogleSearch()),
     ])
     if not text:
-        return None
+        return []
     try:
         parsed = json.loads(extract_json_object(text))
     except (json.JSONDecodeError, TypeError):
         print(f"    ! unparseable JSON from opportunity extraction (raw reply started: {text[:200]!r})")
-        return None
+        return []
     grants = parsed.get("grants") or []
     if not grants or not isinstance(grants, list):
         # Gemini explicitly judged this page not worth extracting (per the
@@ -387,9 +437,9 @@ def extract_opportunity(candidate: dict) -> dict | None:
         # happened, which is what actually lets the per-category limits and
         # prompts get tuned against real data.
         print(f"    (Gemini returned no grants; raw reply started: {text[:200]!r})")
-        return None
-    fields = grants[0]
-    return fields if isinstance(fields, dict) and fields.get("title") else None
+        return []
+    valid = [g for g in grants if isinstance(g, dict) and g.get("title")]
+    return valid[:MAX_ITEMS_PER_OPPORTUNITY_PAGE]
 
 
 def extract_event(candidate: dict) -> dict | None:
@@ -570,26 +620,43 @@ def save_event(fields: dict, candidate: dict) -> bool:
 
 def main() -> None:
     print("Gemini discovery — searching for candidate opportunities and events")
-    candidates = discover_candidates()
-    print(f"{len(candidates)} candidate(s) found")
-    if not candidates:
-        print("Done. Nothing found this run.")
-        return
-
-    already = seen_urls([c["url"] for c in candidates])
-    fresh = [c for c in candidates if c["url"] not in already]
-    print(f"{len(fresh)} new candidate(s) to extract ({len(candidates) - len(fresh)} seen before)")
 
     saved_opportunities = 0
     saved_events = 0
+
+    # Fixed sources first: specific funder pages checked on every run
+    # regardless of what the broad search below happens to surface — see
+    # FIXED_OPPORTUNITY_SOURCES above for why these bypass seen_urls().
+    if FIXED_OPPORTUNITY_SOURCES:
+        print(f"\nChecking {len(FIXED_OPPORTUNITY_SOURCES)} fixed opportunity source(s)")
+        for source in FIXED_OPPORTUNITY_SOURCES:
+            print(f"  → [fixed] {source['title'][:70]}")
+            fields_list = extract_opportunity(source)
+            if not fields_list:
+                print("    - nothing extractable; skipped")
+            for fields in fields_list:
+                if save_opportunity(fields, source):
+                    saved_opportunities += 1
+            time.sleep(GEMINI_PACING_SECONDS)
+
+    candidates = discover_candidates()
+    print(f"\n{len(candidates)} candidate(s) found via search")
+
+    fresh = []
+    if candidates:
+        already = seen_urls([c["url"] for c in candidates])
+        fresh = [c for c in candidates if c["url"] not in already]
+        print(f"{len(fresh)} new candidate(s) to extract ({len(candidates) - len(fresh)} seen before)")
+
     for candidate in fresh:
         print(f"  → [{candidate['kind']}] {candidate['title'][:70]}")
         if candidate["kind"] == "opportunity":
-            fields = extract_opportunity(candidate)
-            if not fields:
+            fields_list = extract_opportunity(candidate)
+            if not fields_list:
                 print("    - nothing extractable; skipped")
-            elif save_opportunity(fields, candidate):
-                saved_opportunities += 1
+            for fields in fields_list:
+                if save_opportunity(fields, candidate):
+                    saved_opportunities += 1
         else:
             fields = extract_event(candidate)
             if not fields:

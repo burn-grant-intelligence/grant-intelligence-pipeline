@@ -246,11 +246,18 @@ Each item must have exactly these fields (use null for anything not stated — n
   "start_date": string | null,      // ISO date "YYYY-MM-DD"
   "end_date": string | null,        // ISO date "YYYY-MM-DD", or null for a single-day event
   "location": string | null,        // city/venue as stated, if any
-  "geography": string | null,       // broad region
+  "geography": string | null,       // the SPECIFIC country the event is in or focused on — see "Rules for geography" below
   "focus_areas": string[],          // choose from: clean energy, clean cooking, climate change, GHG reduction, energy transition, deforestation, manufacturing, women/gender, tech & innovation, engineering, AI/data
   "description": string | null,     // 1-2 sentence neutral summary of what the event is
   "fit_analysis": string | null     // 2-4 sentences on why this event specifically is (or isn't) worth BURN's attendance — same idea as the "fit_analysis" field the opportunities pipeline writes, but framed around visibility/networking value rather than fundability
 }}}}
+
+Rules for "geography":
+- Prefer a single, specific country name (e.g. "Nigeria", "Kenya", "Malawi") over a broad region ("Africa", "West Africa", "Sub-Saharan Africa") whenever the country is knowable — this is what powers a country-level filter downstream, so precision matters.
+- Infer the country from whatever tells you where it actually is: the venue/location, the organizer, or often the event's own name (e.g. "Nigeria Energy Forum", "11th Nigeria Energy Forum (virtual)" → "Nigeria" — a virtual event still gets the country it's about/organized for, not a generic label). Don't require the page to spell out "Nigeria" in so many words if the title or venue already makes it unambiguous.
+- Only fall back to a broader label ("Africa", "East Africa", etc.) when the event genuinely spans multiple countries with no single host country (e.g. a pan-African roadshow, a multi-city regional tour).
+- Use "International" or "Global" only when the event has no particular country or regional tie at all.
+- Use null only if you truly cannot determine any location signal from the page, title, or organizer.
 
 Rules for "fit_analysis" (same spirit as the opportunities pipeline's, framed for an event rather than a funding call):
 - Write it as an analyst briefing the company's grants/BD team on whether attending is worthwhile, not marketing copy.

@@ -39,11 +39,25 @@ const GEOGRAPHY_FILTER_OPTIONS = [
 const EVENT_TYPE_OPTIONS = ["Any type", "Conference", "Summit", "Forum", "Webinar", "Workshop", "Trade show"];
 const FORMAT_OPTIONS = ["Any format", "Virtual", "In-person", "Hybrid"];
 
+// Older rows (and any future extraction slip-up) can still land with a broad
+// region like "Africa"/"West Africa" in event.geography even though the
+// specific country is obvious from the event's own name or venue (e.g.
+// "Nigeria Energy Forum"). Rather than only trusting the geography field,
+// fold title + location in as fallback signal so the Geography filter still
+// finds the right country. gemini_discover.py's EVENT_EXTRACTION_PROMPT_TEMPLATE
+// now also instructs Gemini to prefer a specific country up front, so this is
+// a safety net for existing rows and edge cases, not the primary fix.
+type GeographyFields = Pick<EventItem, "geography" | "location" | "title">;
+
+function geographyHaystack(event: GeographyFields): string {
+  return [event.geography, event.location, event.title].filter(Boolean).join(" ").toLowerCase();
+}
+
 // Lower = higher priority. A named priority country first (in the order
 // above), then anything else that mentions Africa generally, then
 // international/unstated last.
-function geographyRank(geo: string | null): number {
-  const g = (geo ?? "").toLowerCase();
+function geographyRank(event: GeographyFields): number {
+  const g = geographyHaystack(event);
   for (let i = 0; i < GEOGRAPHY_PRIORITY.length; i++) {
     const country = GEOGRAPHY_PRIORITY[i];
     const aliases = GEOGRAPHY_ALIASES[country] ?? [];
@@ -53,11 +67,12 @@ function geographyRank(geo: string | null): number {
   return GEOGRAPHY_PRIORITY.length + 1;
 }
 
-function matchesGeographyFilter(geo: string | null, filter: string): boolean {
+function matchesGeographyFilter(event: GeographyFields, filter: string): boolean {
   if (filter === GEOGRAPHY_FILTER_OPTIONS[0]) return true;
-  if (filter === "International") return geographyRank(geo) === GEOGRAPHY_PRIORITY.length + 1;
-  if (filter === "Africa (general)") return geographyRank(geo) === GEOGRAPHY_PRIORITY.length;
-  return geographyRank(geo) === GEOGRAPHY_PRIORITY.indexOf(filter);
+  const rank = geographyRank(event);
+  if (filter === "International") return rank === GEOGRAPHY_PRIORITY.length + 1;
+  if (filter === "Africa (general)") return rank === GEOGRAPHY_PRIORITY.length;
+  return rank === GEOGRAPHY_PRIORITY.indexOf(filter);
 }
 
 // Deliberately its own tab, separate from the Grant Scanner's opportunity
@@ -136,7 +151,7 @@ export default function EventsScanner() {
           );
           if (!overlap) return false;
         }
-        if (!matchesGeographyFilter(e.geography, geographyFilter)) return false;
+        if (!matchesGeographyFilter(e, geographyFilter)) return false;
         if (eventTypeFilter !== EVENT_TYPE_OPTIONS[0]) {
           if (!e.event_type || !e.event_type.toLowerCase().includes(eventTypeFilter.toLowerCase())) return false;
         }
@@ -155,7 +170,7 @@ export default function EventsScanner() {
         // events that share the exact same date (or both lack one).
         const dateDiff = (a.start_date ?? "9999").localeCompare(b.start_date ?? "9999");
         if (dateDiff !== 0) return dateDiff;
-        return geographyRank(a.geography) - geographyRank(b.geography);
+        return geographyRank(a) - geographyRank(b);
       });
   }, [events, activeFocusAreas, geographyFilter, eventTypeFilter, formatFilter]);
 

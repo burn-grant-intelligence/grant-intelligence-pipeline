@@ -115,22 +115,44 @@ function hostOf(url: string | null | undefined): string | null {
   }
 }
 
+// Gemini's google_search grounding tool (used by scripts/gemini_discover.py's
+// discovery step) often hands back a citation redirect on this domain
+// instead of the funder's actual page — e.g.
+// "https://vertexaisearch.cloud.google.com/grounding-api-redirect/...". It's
+// not the donor's site, and telling Claude to "check vertexaisearch.cloud.google.com
+// for the current stage" (a real thing this prompt used to say) is useless —
+// that's Google's redirect infrastructure, not a funder. Detect it so the
+// prompt gives Claude a real instruction (search for the actual page) instead.
+function isGeminiGroundingRedirect(url: string | null | undefined): boolean {
+  return !!url && url.includes("vertexaisearch.cloud.google.com");
+}
+
 function buildPrompt(item: TrackerItem): string {
   const g = item.grant;
   const title = g?.title ?? "(untitled grant)";
   const funder = g?.funder ?? "an unnamed funder";
   const amount = g?.amount ? `${g.currency ?? "USD"} ${g.amount.toLocaleString()}` : "Not stated";
   const deadline = g?.deadline ?? "Not stated";
-  const host = hostOf(g?.application_url);
+  const applicationUrl = g?.application_url ?? null;
+  const host = hostOf(applicationUrl);
+  const isRedirect = isGeminiGroundingRedirect(applicationUrl);
+
+  const sourcingInstruction = isRedirect
+    ? `The source link below (${applicationUrl}) is a Google search-grounding redirect, not the funder's own page, so don't rely on it directly — search the web for "${title}" by "${funder}" to find the actual, current call page on the funder's own domain, and use that as your real source.`
+    : host
+    ? `Before drafting, fetch and read the actual call page at ${host} (the source link below) — this may have moved on since it was captured, so confirm the current stage and requirements directly from it rather than relying only on the summary below.`
+    : `No usable source URL was captured for this opportunity — before drafting, search the web for "${title}" by "${funder}" to find the actual, current call page.`;
 
   const opening =
     `Draft a compelling high-level one-pager concept note for a grant application for ` +
     `BURN Manufacturing applying to "${title}" by ${funder}. ` +
-    `Grant value: ${amount}. Deadline: ${deadline}.` +
-    (host ? ` Check ${host} for the current stage before drafting — this may have moved on since it was captured.` : "");
+    `Grant value: ${amount}. Deadline: ${deadline}. ` +
+    sourcingInstruction;
 
   return [
     opening,
+    "",
+    "Once you've found the funder's own call page, look for and open any application materials it links to — guidelines, an application form or template, and especially the Terms of Reference (ToR) / Request for Proposals (RFP). Base the concept note on what those documents actually require, not just the scanner's summary below, which can be incomplete or stale.",
     "",
     "Include:",
     "1) Executive summary",
@@ -139,13 +161,15 @@ function buildPrompt(item: TrackerItem): string {
     `4) Key metrics (${BURN_KEY_METRICS})`,
     "5) Budget outline",
     "6) Why BURN is uniquely qualified",
+    "7) Terms of Reference (ToR), as published by the funder — reproduce its actual requirements/structure if you can access the document. If you cannot access it (paywalled, requires login, a broken link, or you cannot confirm you found the correct page), say so plainly here and give the direct link(s) you found instead of guessing at what it requires.",
     "",
     "Follow the rules in this project's instructions, and draw on the past applications in its knowledge. Mark anything you cannot source with [NEEDS INPUT], and list those markers as a checklist at the end.",
     "",
-    "--- SUPPORTING CONTEXT (captured by the Grant Intelligence scanner) ---",
+    "--- SUPPORTING CONTEXT (captured by the Grant Intelligence scanner — verify against the funder's own page above; this may be incomplete or stale) ---",
     `Geography: ${g?.geography ?? "Not stated"}`,
     `Focus areas: ${g?.focus_areas?.length ? g.focus_areas.join(", ") : "Not stated"}`,
-    `Source: ${g?.application_url ?? "Not stated"}`,
+    `Source: ${applicationUrl ?? "Not stated"}` +
+      (isRedirect ? " (a Google search-grounding redirect, not the funder's own page — see instructions above)" : ""),
     "",
     "Eligibility (as published):",
     g?.eligibility?.trim() || "Not specified",
@@ -159,6 +183,6 @@ function buildPrompt(item: TrackerItem): string {
     "TOR / RFP:",
     item.tor_text?.trim()
       ? item.tor_text.trim()
-      : "[No TOR text pasted - attach the TOR/RFP document to this conversation instead.]",
+      : "[No TOR text pasted - attach the TOR/RFP document to this conversation instead, or find and read it per the instructions above.]",
   ].join("\n");
 }

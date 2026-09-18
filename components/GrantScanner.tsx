@@ -1,32 +1,25 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { FOCUS_AREAS, Grant } from "@/lib/types";
+import { TrackerItem } from "@/lib/types";
 
-const MIN_VALUE_OPTIONS = [
-  { label: "Any amount", value: 0 },
-  { label: "USD 50K+", value: 50_000 },
-  { label: "USD 100K+", value: 100_000 },
-  { label: "USD 250K+", value: 250_000 },
-  { label: "USD 500K+", value: 500_000 },
-  { label: "USD 1M+", value: 1_000_000 },
-];
+// Your BURN Grant Applications project on claude.ai.
+const CLAUDE_PROJECT_URL = "https://claude.ai/project/019f120f-e2b8-7021-9988-715495c38989";
 
-const GEOGRAPHY_OPTIONS = ["Any geography", "Africa-focused", "Global", "East Africa", "Kenya"];
+// BURN's headline track record, quoted verbatim in every drafting prompt.
+// These mirror the BURN_PROFILE block in scripts/scan.mjs,
+// scripts/social_discover.py and scripts/gemini_discover.py — deliberately
+// duplicated, same as those three do between themselves. If BURN's numbers
+// are updated, update them in all four places.
+const BURN_KEY_METRICS =
+  "7.4M+ clean cookstoves sold, 37.5M+ lives impacted, 56.7K+ jobs created since 2013, 81M+ tonnes of CO2 reduced, 5M+ carbon credits issued";
 
-export default function GrantScanner() {
-  const [grants, setGrants] = useState<Grant[]>([]);
-  const [sourceCount, setSourceCount] = useState<number | null>(null);
+export default function DraftApplication() {
+  const [items, setItems] = useState<TrackerItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const [activeFocusAreas, setActiveFocusAreas] = useState<string[]>([]);
-  const [minValue, setMinValue] = useState(0);
-  const [geography, setGeography] = useState(GEOGRAPHY_OPTIONS[0]);
-  const [trackedIds, setTrackedIds] = useState<Set<string>>(new Set());
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [discardingId, setDiscardingId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -35,232 +28,39 @@ export default function GrantScanner() {
   async function loadData() {
     setLoading(true);
     setError(null);
+    const { data, error: fetchError } = await supabase
+      .from("tracker_items")
+      .select("*, grant:grants(*)")
+      .in("status", ["tracking", "researching", "drafting"])
+      .order("updated_at", { ascending: false });
+    if (fetchError) setError(fetchError.message);
+    setItems((data as unknown as TrackerItem[]) ?? []);
+    setLoading(false);
+  }
+
+  async function handleDraftClick(item: TrackerItem) {
+    const prompt = buildPrompt(item);
     try {
-      const [{ count }, { data, error: grantsError }] = await Promise.all([
-        supabase.from("sources").select("id", { count: "exact", head: true }).eq("active", true),
-        supabase
-          .from("grants")
-          .select("*")
-          .order("relevance_score", { ascending: false, nullsFirst: false })
-          .order("first_seen_at", { ascending: false })
-          .limit(200),
-      ]);
-      if (grantsError) throw grantsError;
-      setSourceCount(count ?? 0);
-      setGrants(data ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load grants.");
-    } finally {
-      setLoading(false);
+      await navigator.clipboard.writeText(prompt);
+      setCopiedId(item.id);
+      window.setTimeout(() => setCopiedId((current) => (current === item.id ? null : current)), 2500);
+    } catch {
+      // Clipboard access can fail in some browser contexts — still open the project either way.
     }
-  }
-
-  function toggleFocusArea(area: string) {
-    setActiveFocusAreas((prev) =>
-      prev.includes(area) ? prev.filter((a) => a !== area) : [...prev, area]
-    );
-  }
-
-  // Strips casing, spaces, and punctuation so button labels like "AI / data"
-  // match however the scraper happened to store the tag (e.g. "ai/data").
-  function normalizeTag(s: string) {
-    return s.toLowerCase().replace(/[^a-z0-9]/g, "");
-  }
-
-  // Reads the `discarded` column without requiring it in the Grant type, so
-  // this still compiles (and the page still loads) whether or not the column
-  // has been added in Supabase yet.
-  function isDiscarded(grant: Grant) {
-    return (grant as Grant & { discarded?: boolean }).discarded === true;
-  }
-
-  // Deadlines already in the past are never useful in a tracker of OPEN
-  // opportunities, so they're hidden the same way a discarded grant is —
-  // automatically, and without waiting for a rescan. This is a display-side
-  // filter, not a deletion: the row still exists (in case a bad date was
-  // extracted), it just won't show. Compared by calendar day rather than the
-  // exact moment `now` is evaluated, so a grant doesn't vanish mid-way
-  // through its own deadline day.
-  function isExpired(grant: Grant) {
-    if (!grant.deadline) return false;
-    const deadline = new Date(grant.deadline);
-    if (Number.isNaN(deadline.getTime())) return false;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return deadline < today;
-  }
-
-  // LinkedIn-sourced opportunities sort to the top. Done here rather than in
-  // the database query on purpose: ordering by a column that doesn't exist yet
-  // would make the whole query fail, and this way the page works with or
-  // without the `priority` column.
-  function priorityOf(grant: Grant) {
-    return (grant as Grant & { priority?: number }).priority ?? 0;
-  }
-
-  const filteredGrants = useMemo(() => {
-    const visible = grants.filter((g) => {
-      if (isDiscarded(g)) return false;
-      if (isExpired(g)) return false;
-      if (activeFocusAreas.length > 0) {
-        const overlap = g.focus_areas?.some((a) =>
-          activeFocusAreas.some((active) => normalizeTag(a) === normalizeTag(active))
-        );
-        if (!overlap) return false;
-      }
-      if (minValue > 0 && (!g.amount || g.amount < minValue)) return false;
-      if (geography !== GEOGRAPHY_OPTIONS[0] && g.geography) {
-        if (!g.geography.toLowerCase().includes(geography.toLowerCase().replace("-focused", "")))
-          return false;
-      }
-      return true;
-    });
-
-    // Stable sort: priority first, then keep the order the query already gave
-    // us (relevance score, then most recently seen).
-    return visible
-      .map((grant, index) => ({ grant, index }))
-      .sort((a, b) =>
-        priorityOf(b.grant) - priorityOf(a.grant) || a.index - b.index
-      )
-      .map((entry) => entry.grant);
-  }, [grants, activeFocusAreas, minValue, geography]);
-
-  async function trackGrant(grant: Grant) {
-    const { error: insertError } = await supabase.from("tracker_items").insert({
-      grant_id: grant.id,
-      status: "tracking",
-    });
-    if (!insertError) {
-      setTrackedIds((prev) => new Set(prev).add(grant.id));
-    }
-  }
-
-  async function discardGrant(grant: Grant) {
-    if (!window.confirm(`Discard "${grant.title}"? It will stop showing up in this list.`)) return;
-
-    setDiscardingId(grant.id);
-    const previous = grants;
-    // Hide it straight away, then put it back if the save fails.
-    setGrants((prev) => prev.filter((g) => g.id !== grant.id));
-
-    const { error: discardError } = await supabase
-      .from("grants")
-      .update({ discarded: true, discarded_at: new Date().toISOString() })
-      .eq("id", grant.id);
-
-    if (discardError) {
-      setGrants(previous);
-      setError(discardError.message);
-    }
-    setDiscardingId(null);
-  }
-
-  // Reads `source_type` without requiring it in the Grant type, same trick as
-  // isDiscarded above — works whether or not the column exists yet.
-  function isFromLinkedIn(grant: Grant) {
-    return (grant as Grant & { source_type?: string }).source_type === "linkedin";
-  }
-
-  // Gemini-sourced opportunities show a green pill (a distinct shade from the
-  // "New" tag's emerald, so the two read separately when both appear on the
-  // same card) but otherwise sort and filter exactly like everything else —
-  // unlike LinkedIn, they don't get top-of-list priority.
-  function isFromGemini(grant: Grant) {
-    return (grant as Grant & { source_type?: string }).source_type === "gemini";
-  }
-
-  function isNew(grant: Grant) {
-    if (!grant.first_seen_at) return false;
-    const seenAt = new Date(grant.first_seen_at).getTime();
-    if (isNaN(seenAt)) return false;
-    const ageDays = (Date.now() - seenAt) / (1000 * 60 * 60 * 24);
-    return ageDays <= 3;
+    window.open(CLAUDE_PROJECT_URL, "_blank", "noopener,noreferrer");
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
-        <h2 className="mb-3 text-sm font-semibold text-[var(--ink)]">Focus areas</h2>
-          <div className="flex flex-wrap gap-2">
-            <button
-             onClick={() => setActiveFocusAreas([])}
-              className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
-               activeFocusAreas.length === 0
-                ? "bg-orange-600 text-white"
-                : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
-            }`}
-          >
-            All
-          </button>
-          {FOCUS_AREAS.map((area) => {
-            const active = activeFocusAreas.includes(area);
-            return (
-              <button
-                key={area}
-                onClick={() => toggleFocusArea(area)}
-                className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
-                  active
-                    ? "bg-[var(--accent)] text-white"
-                    : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
-                }`}
-              >
-                {area}
-              </button>
-            );
-          })}
-        </div>
+        <h2 className="mb-1 text-lg font-semibold text-[var(--ink)]">Draft an application</h2>
+        <p className="text-sm text-[var(--ink-muted)]">
+          Click "Draft application" on a tracked opportunity — it copies a ready-made prompt to
+          your clipboard and opens your BURN Grant Applications project in a new tab. Just paste
+          (Ctrl/Cmd+V) into the message box and hit send. If there's a TOR or RFP document, attach
+          it directly in that Claude chat too.
+        </p>
       </section>
-
-      <section className="flex flex-wrap items-end justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
-        <div className="flex flex-wrap gap-6">
-          <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-[var(--ink-muted)]">
-            Min value
-            <select
-              value={minValue}
-              onChange={(e) => setMinValue(Number(e.target.value))}
-              className="rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-800"
-            >
-              {MIN_VALUE_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-[var(--ink-muted)]">
-            Geography
-            <select
-              value={geography}
-              onChange={(e) => setGeography(e.target.value)}
-              className="rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-800"
-            >
-              {GEOGRAPHY_OPTIONS.map((opt) => (
-                <option key={opt}>{opt}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <button
-          onClick={loadData}
-          className="rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white hover:bg-[var(--accent-dark)]"
-        >
-          Refresh
-        </button>
-      </section>
-
-      {/* This row sits directly on the page's background photo rather than
-          inside a white card, so --ink-muted (tuned for text on white) washes
-          out against it. White + medium weight + a soft shadow keeps it
-          legible over both the bright and dark parts of the image. */}
-      <div className="flex items-center justify-between text-sm font-medium text-white [text-shadow:0_1px_3px_rgb(0_0_0/0.45)]">
-        <span>
-          {sourceCount === null ? "…" : sourceCount} active source{sourceCount === 1 ? "" : "s"}
-        </span>
-        <span>
-          {loading ? "Loading…" : `${filteredGrants.length} matching opportunit${filteredGrants.length === 1 ? "y" : "ies"}`}
-        </span>
-      </div>
 
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -268,160 +68,121 @@ export default function GrantScanner() {
         </div>
       )}
 
-      {!loading && !error && filteredGrants.length === 0 && (
-        <div className="rounded-lg border border-dashed border-neutral-300 bg-[var(--surface)] p-10 text-center text-[var(--ink-muted)]">
-          No grants yet. Once the daily scan runs (or you add sources), matching opportunities will
-          show up here.
+      {!loading && !error && items.length === 0 && (
+        <div className="rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface)] p-10 text-center text-[var(--ink-muted)]">
+          Nothing to draft yet — track an opportunity from the Grant Scanner first.
         </div>
       )}
 
-      <div className="flex flex-col gap-4">
-        {filteredGrants.map((grant) => {
-          const open = expandedId === grant.id;
-          return (
-            <article
-              key={grant.id}
-              onClick={() => setExpandedId(open ? null : grant.id)}
-              className={`cursor-pointer rounded-lg border bg-[var(--surface)] p-5 transition-colors ${
-                open ? "border-[var(--accent)]" : "border-[var(--border)] hover:border-neutral-300"
-              }`}
-            >
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  {grant.funder && <p className="text-xs text-[var(--ink-muted)]">{grant.funder}</p>}
-                  <h3 className="font-serif-display text-lg leading-snug text-[var(--ink)]">
-                    {grant.title}
-                  </h3>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {isFromLinkedIn(grant) && (
-                    <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
-                      LinkedIn
-                    </span>
-                  )}
-                  {isFromGemini(grant) && (
-                    <span className="rounded-full bg-green-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700">
-                      Gemini
-                    </span>
-                  )}
-                  {isNew(grant) && (
-                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                      New
-                    </span>
-                  )}
-                  {grant.relevance_score != null && (
-                    <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-xs font-medium text-[var(--accent-dark)]">
-                      {Math.round(grant.relevance_score)}% match
-                    </span>
-                  )}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      discardGrant(grant);
-                    }}
-                    disabled={discardingId === grant.id}
-                    title="Discard this opportunity"
-                    aria-label="Discard this opportunity"
-                    className="flex h-6 w-6 items-center justify-center rounded-full text-base leading-none text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 disabled:opacity-40"
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-
-              {grant.focus_areas && grant.focus_areas.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {grant.focus_areas.map((tag) => (
-                    <span
-                      key={tag}
-                      className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
+      <div className="flex flex-col gap-3">
+        {items.map((item) => (
+          <div
+            key={item.id}
+            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4"
+          >
+            <div>
+              {item.grant?.funder && (
+                <p className="text-xs text-[var(--ink-muted)]">{item.grant.funder}</p>
               )}
-
-              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--ink-muted)]">
-                {grant.amount && (
-                  <span className="font-medium text-[var(--accent-dark)]">
-                    {grant.currency ?? "USD"} {grant.amount.toLocaleString()}
-                  </span>
-                )}
-                {grant.deadline && <span>Closes {grant.deadline}</span>}
-                {grant.geography && <span>{grant.geography}</span>}
-              </div>
-
-              {!open && (grant.fit_analysis || grant.description) && (
-                <p className="mt-3 line-clamp-2 text-sm text-neutral-600">
-                  {grant.fit_analysis || grant.description}
-                </p>
-              )}
-
-              {open && (
-                <div className="mt-4 space-y-4 border-t border-[var(--border)] pt-4">
-                  {grant.fit_analysis && (
-                    <div className="rounded-md border-l-4 border-[var(--accent)] bg-[var(--accent-soft)] p-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--accent-dark)]">
-                        Fit for BURN
-                      </p>
-                      <p className="mt-1 text-sm text-neutral-700">{grant.fit_analysis}</p>
-                    </div>
-                  )}
-
-                  {grant.description && (
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--ink-muted)]">
-                        Summary
-                      </p>
-                      <p className="mt-1 text-sm text-neutral-600">{grant.description}</p>
-                    </div>
-                  )}
-
-                  {grant.eligibility && (
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--ink-muted)]">
-                        Eligibility
-                      </p>
-                      <p className="mt-1 text-sm text-neutral-600">{grant.eligibility}</p>
-                    </div>
-                  )}
-
-                  <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                    {grant.application_url ? (
-                     <a
-                        href={grant.application_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="text-sm font-medium text-[var(--accent)] hover:underline"
-                      >
-                        View opportunity →
-                      </a>
-                    ) : (
-                      <span />
-                    )}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        trackGrant(grant);
-                      }}
-                      disabled={trackedIds.has(grant.id)}
-                      className="rounded-md border border-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:border-neutral-300 disabled:text-neutral-400"
-                    >
-                      {trackedIds.has(grant.id) ? "Tracked ✓" : "+ Track this grant"}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <p className="mt-3 text-[11px] font-medium text-[var(--accent)]">
-                {open ? "Click to collapse ↑" : "Click for details ↓"}
+              <p className="font-medium text-[var(--ink)]">
+                {item.grant?.title ?? "(untitled grant)"}
               </p>
-            </article>
-          );
-        })}
+              <p className="text-xs text-[var(--ink-muted)]">Status: {item.status}</p>
+            </div>
+            <button
+              onClick={() => handleDraftClick(item)}
+              className="rounded-md border border-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)]"
+            >
+              {copiedId === item.id ? "Copied ✓ — opening Claude…" : "Draft application"}
+            </button>
+          </div>
+        ))}
       </div>
     </div>
   );
+}
+
+// The funder's own domain, so the prompt can tell Claude where to go and
+// re-check the call's current stage. Deadlines and stages drift (rolling
+// calls, EoI windows), and whatever the scanner captured may be weeks old by
+// the time anyone drafts against it.
+function hostOf(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+// Gemini's google_search grounding tool (used by scripts/gemini_discover.py's
+// discovery step) often hands back a citation redirect on this domain
+// instead of the funder's actual page — e.g.
+// "https://vertexaisearch.cloud.google.com/grounding-api-redirect/...". It's
+// not the donor's site, and telling Claude to "check vertexaisearch.cloud.google.com
+// for the current stage" (a real thing this prompt used to say) is useless —
+// that's Google's redirect infrastructure, not a funder. Detect it so the
+// prompt gives Claude a real instruction (search for the actual page) instead.
+function isGeminiGroundingRedirect(url: string | null | undefined): boolean {
+  return !!url && url.includes("vertexaisearch.cloud.google.com");
+}
+
+function buildPrompt(item: TrackerItem): string {
+  const g = item.grant;
+  const title = g?.title ?? "(untitled grant)";
+  const funder = g?.funder ?? "an unnamed funder";
+  const amount = g?.amount ? `${g.currency ?? "USD"} ${g.amount.toLocaleString()}` : "Not stated";
+  const deadline = g?.deadline ?? "Not stated";
+  const applicationUrl = g?.application_url ?? null;
+  const host = hostOf(applicationUrl);
+  const isRedirect = isGeminiGroundingRedirect(applicationUrl);
+
+  const sourcingInstruction = isRedirect
+    ? `The source link below (${applicationUrl}) is a Google search-grounding redirect, not the funder's own page, so don't rely on it directly — search the web for "${title}" by "${funder}" to find the actual, current call page on the funder's own domain, and use that as your real source.`
+    : host
+    ? `Before drafting, fetch and read the actual call page at ${host} (the source link below) — this may have moved on since it was captured, so confirm the current stage and requirements directly from it rather than relying only on the summary below.`
+    : `No usable source URL was captured for this opportunity — before drafting, search the web for "${title}" by "${funder}" to find the actual, current call page.`;
+
+  const opening =
+    `Draft a compelling high-level one-pager concept note for a grant application for ` +
+    `BURN Manufacturing applying to "${title}" by ${funder}. ` +
+    `Grant value: ${amount}. Deadline: ${deadline}. ` +
+    sourcingInstruction;
+
+  return [
+    opening,
+    "",
+    "Once you've found the funder's own call page, look for and open any application materials it links to — guidelines, an application form or template, and especially the Terms of Reference (ToR) / Request for Proposals (RFP). Base the concept note on what those documents actually require, not just the scanner's summary below, which can be incomplete or stale.",
+    "",
+    "Include:",
+    "1) Executive summary",
+    "2) Problem statement",
+    "3) BURN solution and impact",
+    `4) Key metrics (${BURN_KEY_METRICS})`,
+    "5) Budget outline",
+    "6) Why BURN is uniquely qualified",
+    "7) Terms of Reference (ToR), as published by the funder — reproduce its actual requirements/structure if you can access the document. If you cannot access it (paywalled, requires login, a broken link, or you cannot confirm you found the correct page), say so plainly here and give the direct link(s) you found instead of guessing at what it requires.",
+    "",
+    "Follow the rules in this project's instructions, and draw on the past applications in its knowledge. Mark anything you cannot source with [NEEDS INPUT], and list those markers as a checklist at the end.",
+    "",
+    "--- SUPPORTING CONTEXT (captured by the Grant Intelligence scanner — verify against the funder's own page above; this may be incomplete or stale) ---",
+    `Geography: ${g?.geography ?? "Not stated"}`,
+    `Focus areas: ${g?.focus_areas?.length ? g.focus_areas.join(", ") : "Not stated"}`,
+    `Source: ${applicationUrl ?? "Not stated"}` +
+      (isRedirect ? " (a Google search-grounding redirect, not the funder's own page — see instructions above)" : ""),
+    "",
+    "Eligibility (as published):",
+    g?.eligibility?.trim() || "Not specified",
+    "",
+    "Summary of the opportunity:",
+    g?.description?.trim() || "Not provided",
+    "",
+    "Our internal fit assessment:",
+    g?.fit_analysis?.trim() || "Not yet analyzed",
+    "",
+    "TOR / RFP:",
+    item.tor_text?.trim()
+      ? item.tor_text.trim()
+      : "[No TOR text pasted - attach the TOR/RFP document to this conversation instead, or find and read it per the instructions above.]",
+  ].join("\n");
 }

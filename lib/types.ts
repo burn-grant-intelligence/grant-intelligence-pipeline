@@ -18,6 +18,7 @@ export const TRACKER_STATUSES = [
   "drafting",
   "submitted",
   "won",
+  "implementation",
   "lost",
 ] as const;
 
@@ -38,6 +39,14 @@ export interface Grant {
   fit_analysis: string | null;
   application_url: string | null;
   relevance_score: number | null;
+  // Free-text "where this came from" note (e.g. "referred by Jane at XYZ
+  // Foundation", "found via donor's LinkedIn"). Only ever set on manually
+  // added grants, via the Application Tracker's "+ Add grant" form — distinct
+  // from source_id/source_type, which track the scraper pipeline's own
+  // source records. Optional because it's a newer column
+  // (supabase/tracker_migration_2026-09-18.sql) that may not exist on every
+  // row, and older Grant rows never had it set.
+  source_note?: string | null;
   first_seen_at: string;
   last_seen_at: string;
 }

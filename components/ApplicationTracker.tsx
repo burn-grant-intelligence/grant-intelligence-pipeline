@@ -10,16 +10,32 @@ const STATUS_LABELS: Record<TrackerStatus, string> = {
   drafting: "Drafting",
   submitted: "Submitted",
   won: "Won",
+  implementation: "Implementation",
   lost: "Lost",
 };
+
+// The three "still in the pipeline" statuses that roll up into the
+// "In progress" stat tile and filter.
+const IN_PROGRESS_STATUSES: TrackerStatus[] = ["tracking", "researching", "drafting"];
+
+type StatusFilter = TrackerStatus | "all" | "in_progress";
+
+function formatMoney(amount: number, currency?: string | null) {
+  return `${currency ?? "USD"} ${amount.toLocaleString()}`;
+}
 
 export default function ApplicationTracker() {
   const [items, setItems] = useState<TrackerItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<TrackerStatus | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [addingManual, setAddingManual] = useState(false);
   const [manualTitle, setManualTitle] = useState("");
+  const [manualUrl, setManualUrl] = useState("");
+  const [manualDeadline, setManualDeadline] = useState("");
+  const [manualAmount, setManualAmount] = useState("");
+  const [manualSource, setManualSource] = useState("");
+  const [manualNotes, setManualNotes] = useState("");
 
   useEffect(() => {
     loadData();
@@ -38,19 +54,37 @@ export default function ApplicationTracker() {
   }
 
   const counts = useMemo(() => {
-    const base: Record<string, number> = { total: items.length, in_progress: 0, submitted: 0, won: 0 };
+    const base = {
+      total: items.length,
+      in_progress: 0,
+      submitted: 0,
+      won: 0,
+      wonValue: 0,
+      implementation: 0,
+      implementationValue: 0,
+    };
     for (const item of items) {
-      if (["tracking", "researching", "drafting"].includes(item.status)) base.in_progress++;
+      if (IN_PROGRESS_STATUSES.includes(item.status)) base.in_progress++;
       if (item.status === "submitted") base.submitted++;
-      if (item.status === "won") base.won++;
+      if (item.status === "won") {
+        base.won++;
+        base.wonValue += item.grant?.amount ?? 0;
+      }
+      if (item.status === "implementation") {
+        base.implementation++;
+        base.implementationValue += item.grant?.amount ?? 0;
+      }
     }
     return base;
   }, [items]);
 
-  const filteredItems = useMemo(
-    () => (statusFilter === "all" ? items : items.filter((i) => i.status === statusFilter)),
-    [items, statusFilter]
-  );
+  const filteredItems = useMemo(() => {
+    if (statusFilter === "all") return items;
+    if (statusFilter === "in_progress") {
+      return items.filter((i) => IN_PROGRESS_STATUSES.includes(i.status));
+    }
+    return items.filter((i) => i.status === statusFilter);
+  }, [items, statusFilter]);
 
   async function updateStatus(id: string, status: TrackerStatus) {
     const { error: updateError } = await supabase
@@ -70,15 +104,47 @@ export default function ApplicationTracker() {
     return title.toLowerCase().replace(/[^a-z0-9]+/g, "");
   }
 
+  function resetManualForm() {
+    setManualTitle("");
+    setManualUrl("");
+    setManualDeadline("");
+    setManualAmount("");
+    setManualSource("");
+    setManualNotes("");
+    setAddingManual(false);
+  }
+
   async function addManualGrant() {
     const title = manualTitle.trim();
     if (!title) return;
     setError(null);
 
-    // grants.title_key now has a unique index, so a plain insert would throw
-    // if this title already exists (e.g. the scanner already found it). Look
-    // for that existing row first and just track it, rather than erroring or
-    // creating the duplicate the index is there to prevent.
+    let amount: number | null = null;
+    if (manualAmount.trim()) {
+      amount = Number(manualAmount.trim());
+      if (Number.isNaN(amount)) {
+        setError("Grant size must be a number.");
+        return;
+      }
+    }
+
+    // Only the fields the user actually filled in — so enriching an
+    // already-discovered grant (see below) never blanks out data the
+    // scanner already captured.
+    const grantFields: Record<string, unknown> = {};
+    if (manualUrl.trim()) grantFields.application_url = manualUrl.trim();
+    if (manualDeadline) grantFields.deadline = manualDeadline;
+    if (amount !== null) {
+      grantFields.amount = amount;
+      grantFields.currency = "USD";
+    }
+    if (manualSource.trim()) grantFields.source_note = manualSource.trim();
+
+    // grants.title_key has a unique index, so a plain insert would throw if
+    // this title already exists (e.g. the scanner already found it). Look
+    // for that existing row first and just track it (enriching it with
+    // whatever this form captured), rather than erroring or creating the
+    // duplicate the index is there to prevent.
     const { data: existing, error: lookupError } = await supabase
       .from("grants")
       .select("id")
@@ -91,12 +157,24 @@ export default function ApplicationTracker() {
 
     let grantId = existing?.id as string | undefined;
 
-    if (!grantId) {
+    if (grantId) {
+      if (Object.keys(grantFields).length > 0) {
+        const { error: enrichError } = await supabase
+          .from("grants")
+          .update(grantFields)
+          .eq("id", grantId);
+        if (enrichError) {
+          setError(enrichError.message);
+          return;
+        }
+      }
+    } else {
       const { data: grantRow, error: grantError } = await supabase
         .from("grants")
         .insert({
           title,
           content_hash: `manual-${Date.now()}-${title.toLowerCase()}`,
+          ...grantFields,
         })
         .select("id")
         .single();
@@ -110,23 +188,56 @@ export default function ApplicationTracker() {
     const { error: trackerError } = await supabase.from("tracker_items").insert({
       grant_id: grantId,
       status: "tracking",
+      notes: manualNotes.trim() || null,
     });
     if (trackerError) {
       setError(trackerError.message);
       return;
     }
-    setManualTitle("");
-    setAddingManual(false);
+    resetManualForm();
     loadData();
   }
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <StatTile label="Total tracked" value={counts.total} color="text-neutral-800" />
-        <StatTile label="In progress" value={counts.in_progress} color="text-neutral-800" />
-        <StatTile label="Submitted" value={counts.submitted} color="text-neutral-800" />
-        <StatTile label="Won 🎉" value={counts.won} color="text-emerald-600" />
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        <StatTile
+          label="Total tracked"
+          value={counts.total}
+          color="text-neutral-800"
+          active={statusFilter === "all"}
+          onClick={() => setStatusFilter("all")}
+        />
+        <StatTile
+          label="In progress"
+          value={counts.in_progress}
+          color="text-neutral-800"
+          active={statusFilter === "in_progress"}
+          onClick={() => setStatusFilter("in_progress")}
+        />
+        <StatTile
+          label="Submitted"
+          value={counts.submitted}
+          color="text-neutral-800"
+          active={statusFilter === "submitted"}
+          onClick={() => setStatusFilter("submitted")}
+        />
+        <StatTile
+          label="Won 🎉"
+          value={counts.won}
+          color="text-emerald-600"
+          subtitle={counts.wonValue > 0 ? formatMoney(counts.wonValue) : undefined}
+          active={statusFilter === "won"}
+          onClick={() => setStatusFilter("won")}
+        />
+        <StatTile
+          label="Implementation"
+          value={counts.implementation}
+          color="text-blue-600"
+          subtitle={counts.implementationValue > 0 ? formatMoney(counts.implementationValue) : undefined}
+          active={statusFilter === "implementation"}
+          onClick={() => setStatusFilter("implementation")}
+        />
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -145,7 +256,7 @@ export default function ApplicationTracker() {
           ))}
         </div>
         <button
-          onClick={() => setAddingManual((v) => !v)}
+          onClick={() => (addingManual ? resetManualForm() : setAddingManual(true))}
           className="rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-700"
         >
           + Add grant
@@ -153,19 +264,65 @@ export default function ApplicationTracker() {
       </div>
 
       {addingManual && (
-        <div className="flex gap-2 rounded-lg border border-neutral-200 bg-white p-4">
-          <input
-            value={manualTitle}
-            onChange={(e) => setManualTitle(e.target.value)}
-            placeholder="Grant / opportunity name"
-            className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm"
-          />
-          <button
-            onClick={addManualGrant}
-            className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white"
-          >
-            Save
-          </button>
+        <div className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <input
+              value={manualTitle}
+              onChange={(e) => setManualTitle(e.target.value)}
+              placeholder="Grant / opportunity name *"
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm sm:col-span-2"
+            />
+            <input
+              value={manualUrl}
+              onChange={(e) => setManualUrl(e.target.value)}
+              placeholder="Link to the opportunity"
+              type="url"
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            />
+            <input
+              value={manualDeadline}
+              onChange={(e) => setManualDeadline(e.target.value)}
+              type="date"
+              aria-label="Deadline"
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-600"
+            />
+            <input
+              value={manualAmount}
+              onChange={(e) => setManualAmount(e.target.value)}
+              placeholder="Grant size (USD)"
+              type="number"
+              min="0"
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            />
+            <input
+              value={manualSource}
+              onChange={(e) => setManualSource(e.target.value)}
+              placeholder="Source (how you found this)"
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            />
+            <textarea
+              value={manualNotes}
+              onChange={(e) => setManualNotes(e.target.value)}
+              placeholder="Notes"
+              rows={2}
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm sm:col-span-2"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={resetManualForm}
+              className="rounded-md border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={addManualGrant}
+              disabled={!manualTitle.trim()}
+              className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Save
+            </button>
+          </div>
         </div>
       )}
 
@@ -185,39 +342,89 @@ export default function ApplicationTracker() {
       )}
 
       <div className="flex flex-col gap-3">
-        {filteredItems.map((item) => (
-          <div
-            key={item.id}
-            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white p-4"
-          >
-            <div>
-              <p className="font-medium text-neutral-800">{item.grant?.title ?? "(untitled grant)"}</p>
-              {item.grant?.funder && <p className="text-sm text-neutral-500">{item.grant.funder}</p>}
-            </div>
-            <select
-              value={item.status}
-              onChange={(e) => updateStatus(item.id, e.target.value as TrackerStatus)}
-              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+        {filteredItems.map((item) => {
+          const details = [
+            item.grant?.funder,
+            item.grant?.amount ? formatMoney(item.grant.amount, item.grant.currency) : null,
+            item.grant?.deadline ? `Due ${item.grant.deadline}` : null,
+            item.grant?.source_note,
+          ]
+            .filter(Boolean)
+            .join(" · ");
+
+          return (
+            <div
+              key={item.id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white p-4"
             >
-              {TRACKER_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {STATUS_LABELS[status]}
-                </option>
-              ))}
-            </select>
-          </div>
-        ))}
+              <div className="min-w-0 flex-1">
+                {item.grant?.application_url ? (
+                  <a
+                    href={item.grant.application_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-neutral-800 underline decoration-neutral-300 underline-offset-2 hover:text-[var(--accent)]"
+                  >
+                    {item.grant?.title ?? "(untitled grant)"}
+                  </a>
+                ) : (
+                  <p className="font-medium text-neutral-800">
+                    {item.grant?.title ?? "(untitled grant)"}
+                  </p>
+                )}
+                {details && <p className="text-sm text-neutral-500">{details}</p>}
+                {item.notes && <p className="mt-1 text-sm italic text-neutral-500">{item.notes}</p>}
+              </div>
+              <select
+                value={item.status}
+                onChange={(e) => updateStatus(item.id, e.target.value as TrackerStatus)}
+                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              >
+                {TRACKER_STATUSES.map((status) => (
+                  <option key={status} value={status}>
+                    {STATUS_LABELS[status]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function StatTile({ label, value, color }: { label: string; value: number; color: string }) {
+function StatTile({
+  label,
+  value,
+  color,
+  subtitle,
+  active,
+  onClick,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  subtitle?: string;
+  active?: boolean;
+  onClick?: () => void;
+}) {
+  // A real <button> (not a <div>) so this is keyboard/focus accessible —
+  // every tile now doubles as a shortcut for the matching status filter.
   return (
-    <div className="rounded-lg border border-neutral-200 bg-white p-4 text-center">
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-lg border p-4 text-center transition-colors ${
+        active
+          ? "border-[var(--accent)] bg-orange-50"
+          : "border-neutral-200 bg-white hover:bg-neutral-50"
+      }`}
+    >
       <p className={`text-3xl font-semibold ${color}`}>{value}</p>
       <p className="mt-1 text-xs uppercase tracking-wide text-neutral-500">{label}</p>
-    </div>
+      {subtitle && <p className="mt-1 text-xs font-medium text-neutral-600">{subtitle}</p>}
+    </button>
   );
 }
 

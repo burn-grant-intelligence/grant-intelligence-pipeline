@@ -1,0 +1,40 @@
+
+# Fixed opportunity sources — specific funder/program pages checked every
+# run, for the grants/opportunities pipeline only (FIXED_OPPORTUNITY_SOURCES
+# in gemini_discover.py). Unrelated to event_sources below.
+sources:
+  - title: "Africa-Europe Innovation Platform — Funding Opportunities"
+    url: "https://www.africaeuropeinnovation.net/funding-opportunities/"
+  - title: "LEAP ENERGY — AU-EU Partnership Call for Funding"
+    url: "https://leap-energy.eu/call-funding"
+  - title: "Mitigation Action Facility — Call for Projects 2026"
+    url: "https://mitigation-action.org/call-for-projects-2026/#application"
+  - title: "FOREST Partnership — FOREST Pathways Joint Call 2026"
+    url: "https://forest-partnership.eu/jointcall2026/"
+
+event_sources:
+  - "https://www.ieta.org/events"
+  - "https://icapcarbonaction.com/en/events"
+  - "https://unfccc.int/calendar/events-list"
+  - "https://www.eacmf.com/"
+  - "https://carbonmarketsafrica.com/"
+  - "https://www.undp.org/africa/ticad/events"
+  - "https://www.unep.org/events/filter/sort_by=publication_date/sort_order=desc/filter_by=latest/page=0"
+  - "https://www.climateweeknyc.org/event-search"
+  - "https://londonclimateactionweek.org/events/?terms=energy%2Ccarbon-removal-geoengineering&page_num=1"
+  - "https://www.weforum.org/meetings/"
+  - "https://events.reutersevents.com/"
+  - "https://trellis.net/events/greenbiz/"
+  - "https://cleancooking.org/events/"
+  - "https://www.iea.org/events/upcoming"
+  - "https://www.ief.org/ief-events"
+  - "https://energy-news-network.com/networking/africa-energy-forum/"
+  - "https://www.epra.go.ke/events"
+  - "https://www.kengen.co.ke/kengen-events/"
+  - "https://www.worldbank.org/en/events/all"
+  - "https://www.afdb.org/en/news-and-events/events-calendar/ticad-6"
+  - "https://fsdafrica.org/events/"
+  - "https://www.norfund.no/"
+  - "https://naccnigeria.org/events/"
+  - "https://africaclimateforum.com/"
+  - "https://www.eaif.energy/"

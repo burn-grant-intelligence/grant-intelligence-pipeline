@@ -19,13 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     # A real run at the old 15-candidate cap (already using the url_context +
     # google_search combo) took about 3 minutes end to end — roughly 12s per
-    # candidate including GEMINI_PACING_SECONDS. At the new cap (up to 15
-    # opportunities + 25 events = 40 candidates), that same rate projects to
-    # ~8 minutes; 10 gives a bit of headroom for retries/slower fetches
-    # without leaving the job free to run indefinitely. If real runs start
-    # timing out here, that's the signal to trim MAX_EVENTS_PER_RUN back
-    # down rather than just raising this further.
-    timeout-minutes: 10
+    # candidate including GEMINI_PACING_SECONDS. At today's per-run ceiling —
+    # 4 fixed opportunity sources + 24 fixed event sources (config/sources.yaml)
+    # + up to 15 discovered opportunities + 25 discovered events = up to 68
+    # extraction calls — that same rate projects to ~14 minutes; 20 gives
+    # headroom for retries/slower fetches without leaving the job free to run
+    # indefinitely. If real runs start timing out here, that's the signal to
+    # trim MAX_EVENTS_PER_RUN (or the event_sources list) back down rather
+    # than just raising this further.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -35,7 +37,7 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install requests==2.32.3 google-genai==2.23.0
+        run: pip install requests==2.32.3 google-genai==2.23.0 pyyaml==6.0.2
 
       - name: Run Gemini discovery
         env:

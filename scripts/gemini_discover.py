@@ -36,11 +36,15 @@ Runs in CI:   see .github/workflows/gemini-discover.yml
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
+import yaml
 from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
@@ -51,10 +55,18 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+
+
+def _load_yaml(name: str) -> dict:
+    with open(CONFIG_DIR / name, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
 # If this ever 404s, check ai.google.dev/gemini-api/docs/models for the
 # current flash-tier model name and swap it here — everything else stays
 # the same.
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 
 # --- Cost / noise controls -------------------------------------------------
 # One discovery call, plus up to this many per-candidate extraction calls —
@@ -78,7 +90,7 @@ MAX_ITEMS_PER_OPPORTUNITY_PAGE = 5
 
 GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_BACKOFF_SECONDS = 20  # fallback wait if no retry hint is available
-GEMINI_PACING_SECONDS = 2.0        # deliberate pause between extraction calls
+GEMINI_PACING_SECONDS = 2.0  # deliberate pause between extraction calls
 
 TODAY = datetime.now(timezone.utc).date()
 
@@ -100,7 +112,8 @@ BURN_PROFILE = """BURN Manufacturing — company profile for grant-fit assessmen
 # generic topic searches even when it's a strong, known fit. Added
 # 2026-09-18 per user request, mirroring the fixed `sources` table
 # scan.mjs/crawl_discover.py already read from for the Groq pipeline; this
-# is the Gemini pipeline's own small, hardcoded equivalent.
+# is the Gemini pipeline's own equivalent. Lives in config/sources.yaml —
+# edit that file to add/remove a fixed source, no code changes needed.
 #
 # Unlike discover_candidates()'s results, these are NOT filtered by
 # seen_urls() in main() — they're re-extracted every run, since the page
@@ -113,23 +126,26 @@ BURN_PROFILE = """BURN Manufacturing — company profile for grant-fit assessmen
 # Each entry's "title" is a human label for logging, not literally the
 # expected opportunity's title — extract_opportunity()'s prompt treats it as
 # a loose hint the way it already does for discover_candidates()'s guesses.
+_sources_config = _load_yaml("sources.yaml")
+
 FIXED_OPPORTUNITY_SOURCES = [
-    {
-        "title": "Africa-Europe Innovation Platform — Funding Opportunities",
-        "url": "https://www.africaeuropeinnovation.net/funding-opportunities/",
-    },
-    {
-        "title": "LEAP ENERGY — AU-EU Partnership Call for Funding",
-        "url": "https://leap-energy.eu/call-funding",
-    },
-    {
-        "title": "Mitigation Action Facility — Call for Projects 2026",
-        "url": "https://mitigation-action.org/call-for-projects-2026/#application",
-    },
-    {
-        "title": "FOREST Partnership — FOREST Pathways Joint Call 2026",
-        "url": "https://forest-partnership.eu/jointcall2026/",
-    },
+    source
+    for source in (_sources_config.get("sources") or [])
+    if isinstance(source, dict) and source.get("title") and source.get("url")
+]
+
+# Fixed EVENT sources — known events-listing pages read directly every run,
+# same "checked regardless of what the broad search finds" treatment as
+# FIXED_OPPORTUNITY_SOURCES above. Ported from climate-cooking-watch's
+# config/sources.yaml (a dedicated events-discovery pipeline) — ~24 trusted
+# carbon-market/climate/energy events pages. Lives in config/sources.yaml
+# under the event_sources key; edit that file to add/remove one, no code
+# changes needed. Each entry is a plain URL string there; the hostname
+# becomes its "title" hint for extract_event()'s prompt.
+FIXED_EVENT_SOURCES = [
+    {"title": urlparse(url).hostname or url, "url": url}
+    for url in (_sources_config.get("event_sources") or [])
+    if isinstance(url, str) and url.strip()
 ]
 
 # Deliberately broader than BURN_PROFILE's own fit criteria — events are a
@@ -139,29 +155,12 @@ FIXED_OPPORTUNITY_SOURCES = [
 # actual results in the Events tab: PRIMARY is the core sector list (search
 # this thoroughly, first); SECONDARY widens coverage but should not crowd out
 # primary-topic events — see how these are used in DISCOVERY_PROMPT below.
-PRIMARY_EVENT_TOPICS = [
-    "carbon markets",
-    "climate",
-    "clean cooking",
-    "energy",
-    "development finance",
-    "environmental, social and governance (ESG)",
-    "sustainability",
-]
-SECONDARY_EVENT_TOPICS = [
-    "climate technology and innovation",
-    "impact investment",
-    "gender and inclusive development",
-    "Africa / emerging-market development",
-]
-# Removed "nature / environmental markets (carbon credits, biodiversity
-# credits, ecosystem-service markets)" per explicit user feedback after
-# reviewing actual Events tab results — even framed around "market
-# mechanisms," this topic was the direct source of biodiversity/conservation
-# events slipping through. Biodiversity is a different focus area from
-# BURN's clean cooking / carbon-market-for-cookstoves business; see the
-# blanket biodiversity exclusion below, which now excludes it regardless of
-# framing rather than only excluding "conservation policy" summits.
+# Both lists live in config/taxonomy.yaml — edit that file to retune, no code
+# changes needed (see that file's own comments for why "nature /
+# environmental markets" was removed from secondary_topics).
+_taxonomy = _load_yaml("taxonomy.yaml")
+PRIMARY_EVENT_TOPICS = _taxonomy.get("primary_topics") or []
+SECONDARY_EVENT_TOPICS = _taxonomy.get("secondary_topics") or []
 
 # Country priority order, per explicit user request — search (and the Events
 # tab displays) in this order, then broader Africa-wide events, then
@@ -187,12 +186,12 @@ DISCOVERY_PROMPT = f"""Today's date is {TODAY.isoformat()}. Use Google Search to
 
 CATEGORY "opportunity" — up to {MAX_OPPORTUNITIES_PER_RUN} items: a genuine, currently open funding or procurement call — an RFP, EOI, "Call for Solutions", call for proposals, tender, results-based financing call, or similar. Topics: clean cooking, cookstoves, clean/renewable energy, energy access, energy transition, carbon credits/carbon markets, climate finance. Lean broad here at the discovery stage — a detailed fit assessment happens later, per item, so when a topically-relevant opportunity's exact fit is unclear at this stage, include it rather than filtering it out now.
 
-CATEGORY "event" — up to {MAX_EVENTS_PER_RUN} items: a genuine, upcoming (not already past) industry event — a conference, summit, forum, webinar, or trade show — NOT a funding call, NOT a news article about a past event. Events do NOT need to match the company profile as tightly as opportunities do (this is for general visibility/networking).
+CATEGORY "event" — up to {MAX_EVENTS_PER_RUN} items: a genuine, upcoming (not already past) industry event with a specific date and venue/format — a conference, summit, forum, webinar, or trade show — NOT a funding call, NOT a news article about a past event, NOT a general announcement with no scheduled date or format attached. Events do NOT need to match the company profile as tightly as opportunities do (this is for general visibility/networking).
 
 Search these PRIMARY topics thoroughly first — this is a high season for this kind of event, so actively look across all of them rather than stopping at the first few you find:
 {chr(10).join(f"- {topic}" for topic in PRIMARY_EVENT_TOPICS)}
 
-Once you've covered the primary topics well, use any remaining budget on these SECONDARY topics too — genuinely relevant secondary-topic events are still worth including, but don't let them crowd out primary-topic events if you have to choose:
+Once you've covered the primary topics well, use any remaining budget on these SECONDARY topics too — genuinely relevant secondary-topic events are still worth including, but don't let them crowd out primary-topic events if you have to choose. Prioritize fresh information and official sources where possible:
 {chr(10).join(f"- {topic}" for topic in SECONDARY_EVENT_TOPICS)}
 
 GEOGRAPHIC PRIORITY — search for events in this order, and don't stop after the first country or two:
@@ -342,7 +341,7 @@ def extract_json_object(text: str) -> str:
                 break
     start = text.find("{")
     end = text.rfind("}")
-    return text[start:end + 1] if start != -1 and end > start else text
+    return text[start : end + 1] if start != -1 and end > start else text
 
 
 def call_gemini(contents: str, tools: list[types.Tool]) -> str | None:
@@ -365,8 +364,10 @@ def call_gemini(contents: str, tools: list[types.Tool]) -> str | None:
             is_rate_limited = getattr(err, "code", None) == 429
             if is_rate_limited and attempt < GEMINI_MAX_RETRIES - 1:
                 wait = GEMINI_RETRY_BACKOFF_SECONDS
-                print(f"    ! Gemini rate-limited (429); waiting {wait}s and retrying "
-                      f"({attempt + 1}/{GEMINI_MAX_RETRIES})")
+                print(
+                    f"    ! Gemini rate-limited (429); waiting {wait}s and retrying "
+                    f"({attempt + 1}/{GEMINI_MAX_RETRIES})"
+                )
                 time.sleep(wait)
                 continue
             print(f"    ! Gemini request failed: {err}")
@@ -380,7 +381,9 @@ def call_gemini(contents: str, tools: list[types.Tool]) -> str | None:
 def discover_candidates() -> list[dict]:
     """One call, grounded with Google Search, to find candidate opportunities
     and events. Returns a list of {kind, title, url, why_relevant} dicts."""
-    text = call_gemini(DISCOVERY_PROMPT, [types.Tool(google_search=types.GoogleSearch())])
+    text = call_gemini(
+        DISCOVERY_PROMPT, [types.Tool(google_search=types.GoogleSearch())]
+    )
     if not text:
         return []
 
@@ -408,7 +411,9 @@ def discover_candidates() -> list[dict]:
     # budgets (see DISCOVERY_PROMPT), but nothing stops it from returning
     # more of one kind than asked, so enforce both limits here rather than
     # trusting the model, same as the old single combined slice used to.
-    opportunities = [c for c in cleaned if c["kind"] == "opportunity"][:MAX_OPPORTUNITIES_PER_RUN]
+    opportunities = [c for c in cleaned if c["kind"] == "opportunity"][
+        :MAX_OPPORTUNITIES_PER_RUN
+    ]
     events = [c for c in cleaned if c["kind"] == "event"][:MAX_EVENTS_PER_RUN]
     return opportunities + events
 
@@ -422,16 +427,21 @@ def extract_opportunity(candidate: dict) -> list[dict]:
     prompt = OPPORTUNITY_EXTRACTION_PROMPT_TEMPLATE.format(
         url=candidate["url"], title=candidate["title"]
     )
-    text = call_gemini(prompt, [
-        types.Tool(url_context=types.UrlContext()),
-        types.Tool(google_search=types.GoogleSearch()),
-    ])
+    text = call_gemini(
+        prompt,
+        [
+            types.Tool(url_context=types.UrlContext()),
+            types.Tool(google_search=types.GoogleSearch()),
+        ],
+    )
     if not text:
         return []
     try:
         parsed = json.loads(extract_json_object(text))
     except (json.JSONDecodeError, TypeError):
-        print(f"    ! unparseable JSON from opportunity extraction (raw reply started: {text[:200]!r})")
+        print(
+            f"    ! unparseable JSON from opportunity extraction (raw reply started: {text[:200]!r})"
+        )
         return []
     grants = parsed.get("grants") or []
     if not grants or not isinstance(grants, list):
@@ -450,16 +460,21 @@ def extract_event(candidate: dict) -> dict | None:
     prompt = EVENT_EXTRACTION_PROMPT_TEMPLATE.format(
         url=candidate["url"], title=candidate["title"]
     )
-    text = call_gemini(prompt, [
-        types.Tool(url_context=types.UrlContext()),
-        types.Tool(google_search=types.GoogleSearch()),
-    ])
+    text = call_gemini(
+        prompt,
+        [
+            types.Tool(url_context=types.UrlContext()),
+            types.Tool(google_search=types.GoogleSearch()),
+        ],
+    )
     if not text:
         return None
     try:
         parsed = json.loads(extract_json_object(text))
     except (json.JSONDecodeError, TypeError):
-        print(f"    ! unparseable JSON from event extraction (raw reply started: {text[:200]!r})")
+        print(
+            f"    ! unparseable JSON from event extraction (raw reply started: {text[:200]!r})"
+        )
         return None
     events = parsed.get("events") or []
     if not events or not isinstance(events, list):
@@ -467,6 +482,26 @@ def extract_event(candidate: dict) -> dict | None:
         return None
     fields = events[0]
     return fields if isinstance(fields, dict) and fields.get("title") else None
+
+
+# Predatory/spam academic-conference listing sites programmatically generate
+# huge numbers of interchangeable events from this exact title template —
+# e.g. "International Conference on Climate Leadership (ICCL)", "Global
+# Conference on Renewable Energy and Climate Change (GCRECC)". The
+# EVENT_EXTRACTION_PROMPT_TEMPLATE's academic-conference exclusion already
+# asks Gemini to judge this, but a deterministic backstop catches it even
+# when the LLM judgment slips — same pattern as the deadline-passed check
+# in save_opportunity/save_event below. Real conferences essentially never
+# both open with this generic phrasing and close with a bracketed all-caps
+# acronym at once. Ported from climate-cooking-watch's discover.py.
+CONFERENCE_MILL_TITLE = re.compile(
+    r"^(international|global|world)\s+(conference|congress|summit)\s+on\b.*\([A-Z]{2,8}\)\s*$",
+    re.IGNORECASE,
+)
+
+
+def looks_like_conference_mill(title: str) -> bool:
+    return bool(CONFERENCE_MILL_TITLE.match(str(title).strip()))
 
 
 def content_hash(title: str, url: str) -> str:
@@ -503,11 +538,64 @@ def seen_urls(candidate_urls: list[str]) -> set[str]:
     return seen
 
 
+# Workaround for a gap in grants.title_key / events.title_key: that DB
+# column only strips punctuation, so "Some Event" and "Some Event 2026" hash
+# to different keys and both get saved — seen in practice with WEF's
+# "Sustainable Development Impact Meetings" showing up with and without the
+# year across two runs. Rather than change the shared, generated DB column
+# (also mirrored in ApplicationTracker.tsx for manual grant entry), catch it
+# here: fetch existing titles once per run, loosely normalize the same way
+# title_key does PLUS stripping a trailing year, and skip saving anything
+# that already matches. Cached per table so repeated candidates in the same
+# run don't re-fetch.
+_seen_loose_title_keys: dict[str, set[str]] = {}
+
+
+def _loose_title_key(title: str) -> str:
+    stripped = re.sub(r"\s*20\d{2}\s*$", "", str(title).strip())
+    return re.sub(r"[^a-z0-9]", "", stripped.lower())
+
+
+def _is_duplicate_title(table: str, title: str) -> bool:
+    if table not in _seen_loose_title_keys:
+        keys: set[str] = set()
+        try:
+            response = requests.get(
+                f"{SUPABASE_URL}/rest/v1/{table}",
+                headers={
+                    "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                },
+                params={"select": "title"},
+                timeout=30,
+            )
+            response.raise_for_status()
+            keys = {
+                _loose_title_key(row["title"])
+                for row in response.json()
+                if row.get("title")
+            }
+        except Exception as err:
+            print(f"  ! could not check existing {table} titles for duplicates: {err}")
+        _seen_loose_title_keys[table] = keys
+    return _loose_title_key(title) in _seen_loose_title_keys[table]
+
+
+def _remember_title(table: str, title: str) -> None:
+    _seen_loose_title_keys.setdefault(table, set()).add(_loose_title_key(title))
+
+
 def save_opportunity(fields: dict, candidate: dict) -> bool:
     """Upsert one extracted opportunity into `grants`, tagged source_type
     'gemini' so the Grant Scanner shows a green pill on it."""
     title = str(fields.get("title") or "").strip()
     if not title:
+        return False
+
+    if _is_duplicate_title("grants", title):
+        print(
+            f"    - skipped (looks like a duplicate already saved, under a different title): {title}"
+        )
         return False
 
     application_url = fields.get("application_url") or candidate["url"]
@@ -558,10 +646,15 @@ def save_opportunity(fields: dict, candidate: dict) -> bool:
         timeout=30,
     )
     if not response.ok:
-        print(f"    ! saving opportunity failed ({response.status_code}): {response.text[:300]}")
+        print(
+            f"    ! saving opportunity failed ({response.status_code}): {response.text[:300]}"
+        )
         return False
-    print(f"    + [opportunity] {title}"
-          + (f"  (deadline {fields['deadline']})" if fields.get("deadline") else ""))
+    _remember_title("grants", title)
+    print(
+        f"    + [opportunity] {title}"
+        + (f"  (deadline {fields['deadline']})" if fields.get("deadline") else "")
+    )
     return True
 
 
@@ -569,6 +662,16 @@ def save_event(fields: dict, candidate: dict) -> bool:
     """Upsert one extracted event into the separate `events` table."""
     title = str(fields.get("title") or "").strip()
     if not title:
+        return False
+
+    if looks_like_conference_mill(title):
+        print(f"    - skipped (looks like a conference-mill listing): {title}")
+        return False
+
+    if _is_duplicate_title("events", title):
+        print(
+            f"    - skipped (looks like a duplicate already saved, under a different title): {title}"
+        )
         return False
 
     url = candidate["url"]
@@ -615,10 +718,15 @@ def save_event(fields: dict, candidate: dict) -> bool:
         timeout=30,
     )
     if not response.ok:
-        print(f"    ! saving event failed ({response.status_code}): {response.text[:300]}")
+        print(
+            f"    ! saving event failed ({response.status_code}): {response.text[:300]}"
+        )
         return False
-    print(f"    + [event] {title}"
-          + (f"  ({fields['start_date']})" if fields.get("start_date") else ""))
+    _remember_title("events", title)
+    print(
+        f"    + [event] {title}"
+        + (f"  ({fields['start_date']})" if fields.get("start_date") else "")
+    )
     return True
 
 
@@ -632,7 +740,9 @@ def main() -> None:
     # regardless of what the broad search below happens to surface — see
     # FIXED_OPPORTUNITY_SOURCES above for why these bypass seen_urls().
     if FIXED_OPPORTUNITY_SOURCES:
-        print(f"\nChecking {len(FIXED_OPPORTUNITY_SOURCES)} fixed opportunity source(s)")
+        print(
+            f"\nChecking {len(FIXED_OPPORTUNITY_SOURCES)} fixed opportunity source(s)"
+        )
         for source in FIXED_OPPORTUNITY_SOURCES:
             print(f"  → [fixed] {source['title'][:70]}")
             fields_list = extract_opportunity(source)
@@ -643,6 +753,19 @@ def main() -> None:
                     saved_opportunities += 1
             time.sleep(GEMINI_PACING_SECONDS)
 
+    # Fixed event sources: known events-listing pages checked on every run —
+    # see FIXED_EVENT_SOURCES above for why these bypass seen_urls() too.
+    if FIXED_EVENT_SOURCES:
+        print(f"\nChecking {len(FIXED_EVENT_SOURCES)} fixed event source(s)")
+        for source in FIXED_EVENT_SOURCES:
+            print(f"  → [fixed] {source['title'][:70]}")
+            fields = extract_event(source)
+            if not fields:
+                print("    - nothing extractable; skipped")
+            elif save_event(fields, source):
+                saved_events += 1
+            time.sleep(GEMINI_PACING_SECONDS)
+
     candidates = discover_candidates()
     print(f"\n{len(candidates)} candidate(s) found via search")
 
@@ -650,7 +773,9 @@ def main() -> None:
     if candidates:
         already = seen_urls([c["url"] for c in candidates])
         fresh = [c for c in candidates if c["url"] not in already]
-        print(f"{len(fresh)} new candidate(s) to extract ({len(candidates) - len(fresh)} seen before)")
+        print(
+            f"{len(fresh)} new candidate(s) to extract ({len(candidates) - len(fresh)} seen before)"
+        )
 
     for candidate in fresh:
         print(f"  → [{candidate['kind']}] {candidate['title'][:70]}")
@@ -669,8 +794,10 @@ def main() -> None:
                 saved_events += 1
         time.sleep(GEMINI_PACING_SECONDS)
 
-    print(f"\nDone. {saved_opportunities} opportunity/ies added to the Grant Scanner, "
-          f"{saved_events} event(s) added to the Events tab.")
+    print(
+        f"\nDone. {saved_opportunities} opportunity/ies added to the Grant Scanner, "
+        f"{saved_events} event(s) added to the Events tab."
+    )
 
 
 if __name__ == "__main__":

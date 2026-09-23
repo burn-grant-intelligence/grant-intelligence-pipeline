@@ -30,6 +30,18 @@ create policy "Public read access to grants" on grants
 create policy "Public insert access to grants" on grants
   for insert with check (true);
 
+-- The discard (X) button in GrantScanner.tsx (sets discarded=true) and the
+-- Application Tracker's "+ Add grant" enrichment path (backfills
+-- application_url/deadline/amount/source_note onto an existing grant) both
+-- update a grants row directly from the browser. This was applied directly
+-- in the SQL Editor at some point but was missing from this file — a
+-- reference-file drift found and closed on 2026-09-23 (see the project's
+-- status doc). The Eligibility Tracker's "Check eligibility" button does
+-- NOT rely on this policy — it writes via a server-side Next.js API route
+-- using the service-role key, which bypasses RLS entirely.
+create policy "Public update access to grants" on grants
+  for update using (true);
+
 -- Tracker items: read, create ("Track this grant" / "Add grant"), and update
 -- (changing status) all happen from the browser.
 create policy "Public read access to tracker_items" on tracker_items

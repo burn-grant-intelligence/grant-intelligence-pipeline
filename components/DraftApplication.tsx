@@ -84,9 +84,19 @@ export default function DraftApplication() {
               {item.grant?.funder && (
                 <p className="text-xs text-[var(--ink-muted)]">{item.grant.funder}</p>
               )}
-              <p className="font-medium text-[var(--ink)]">
-                {item.grant?.title ?? "(untitled grant)"}
-              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-medium text-[var(--ink)]">
+                  {item.grant?.title ?? "(untitled grant)"}
+                </p>
+                {item.fit_status === "not_fit" && (
+                  <span
+                    title="Marked Not Fit in the Eligibility Tracker — check there before drafting"
+                    className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700"
+                  >
+                    ⚠ Not fit
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-[var(--ink-muted)]">Status: {item.status}</p>
             </div>
             <button

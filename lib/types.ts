@@ -24,6 +24,20 @@ export const TRACKER_STATUSES = [
 
 export type TrackerStatus = (typeof TRACKER_STATUSES)[number];
 
+export const APPLICANT_TYPES = ["single", "consortium", "either", "unclear"] as const;
+export type ApplicantType = (typeof APPLICANT_TYPES)[number];
+
+export const FIT_STATUSES = ["unreviewed", "fit", "not_fit"] as const;
+export type FitStatus = (typeof FIT_STATUSES)[number];
+
+// One named application material found on a donor's page (e.g. "Application
+// Form", "Budget Template", "Terms of Reference") — url is null when the
+// page names the document but doesn't link it directly.
+export interface SupportingDoc {
+  name: string;
+  url: string | null;
+}
+
 export interface Grant {
   id: string;
   source_id: string | null;
@@ -47,6 +61,19 @@ export interface Grant {
   // (supabase/tracker_migration_2026-09-18.sql) that may not exist on every
   // row, and older Grant rows never had it set.
   source_note?: string | null;
+  // Eligibility Tracker fields (supabase/eligibility_migration_2026-09-23.sql)
+  // — populated by the "Check eligibility" button in components/
+  // EligibilityTracker.tsx (app/api/check-eligibility/route.ts), which asks
+  // Gemini to read the donor's own page (same url_context + google_search
+  // pattern scripts/gemini_discover.py uses) and extract who's actually
+  // eligible to apply, distinct from the grant's own thematic `geography`/
+  // `focus_areas` tags above. All optional/nullable because they're only
+  // populated once someone runs the check — most grants won't have them.
+  eligible_countries?: string[] | null;
+  applicant_type?: ApplicantType | null;
+  supporting_docs?: SupportingDoc[] | null;
+  rfp_url?: string | null;
+  eligibility_checked_at?: string | null;
   first_seen_at: string;
   last_seen_at: string;
 }
@@ -82,6 +109,13 @@ export interface TrackerItem {
   owner: string | null;
   notes: string | null;
   tor_text: string | null;
+  // The team's own Fit/Not Fit call for this tracked pursuit — deliberately
+  // separate from the `Grant.eligible_countries`/`applicant_type` etc. above:
+  // those are facts about the opportunity itself (same for anyone looking at
+  // it), this is BURN's judgment call about pursuing it. Defaults to
+  // "unreviewed" until someone sets it in the Eligibility Tracker tab.
+  fit_status?: FitStatus;
+  fit_notes?: string | null;
   created_at: string;
   updated_at: string;
   grant: Grant | null;

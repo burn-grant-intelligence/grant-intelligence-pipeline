@@ -3,14 +3,19 @@
 import { useState } from "react";
 import GrantScanner from "@/components/GrantScanner";
 import ApplicationTracker from "@/components/ApplicationTracker";
+import EligibilityTracker from "@/components/EligibilityTracker";
 import DraftApplication from "@/components/DraftApplication";
 import EventsScanner from "@/components/EventsScanner";
 
-type Tab = "scanner" | "tracker" | "draft" | "events";
+type Tab = "scanner" | "tracker" | "eligibility" | "draft" | "events";
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "scanner", label: "Grant Scanner", icon: "🔍" },
   { id: "tracker", label: "Application Tracker", icon: "📋" },
+  // Sits between Tracker and Draft Application by design — it's the
+  // pre-draft triage step (2026-09-23): see who's actually eligible before
+  // anyone spends time drafting a proposal.
+  { id: "eligibility", label: "Eligibility Tracker", icon: "✅" },
   { id: "draft", label: "Draft Application", icon: "✍️" },
   { id: "events", label: "Events", icon: "📅" },
 ];
@@ -52,6 +57,7 @@ export default function Home() {
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
         {tab === "scanner" && <GrantScanner />}
         {tab === "tracker" && <ApplicationTracker />}
+        {tab === "eligibility" && <EligibilityTracker />}
         {tab === "draft" && <DraftApplication />}
         {tab === "events" && <EventsScanner />}
       </main>

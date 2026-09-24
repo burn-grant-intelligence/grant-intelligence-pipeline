@@ -131,6 +131,35 @@ FIXED_OPPORTUNITY_SOURCES = [
         "title": "FOREST Partnership — FOREST Pathways Joint Call 2026",
         "url": "https://forest-partnership.eu/jointcall2026/",
     },
+    # Added 2026-09-24 per explicit user request. All five are listing/archive
+    # pages rather than single-call pages, so the "extract each distinct open
+    # call separately, up to MAX_ITEMS_PER_OPPORTUNITY_PAGE" branch of
+    # OPPORTUNITY_EXTRACTION_PROMPT_TEMPLATE is what actually does the work
+    # here — the user's instruction ("source for relevant opportunities in
+    # clean cooking, grants, or just any active calls for proposals and
+    # grants") describes exactly that behavior, not a single named
+    # opportunity, so these titles are page labels only, same as the note
+    # above already says.
+    {
+        "title": "EnDev — Calls Archive",
+        "url": "https://endev.info/calls/",
+    },
+    {
+        "title": "AVSI Foundation — Calls and Tenders",
+        "url": "https://www.avsi.org/en/calls-tenders",
+    },
+    {
+        "title": "Grand Challenges Canada — Apply for Funding",
+        "url": "https://www.grandchallenges.ca/apply-for-funding/",
+    },
+    {
+        "title": "Global Innovation Fund — Apply for Funding",
+        "url": "https://www.globalinnovation.fund/apply-for-funding",
+    },
+    {
+        "title": "AAU Chinnova — Grants Management System",
+        "url": "https://grants.chinnova.aau.org/",
+    },
 ]
 
 # Deliberately broader than BURN_PROFILE's own fit criteria — events are a

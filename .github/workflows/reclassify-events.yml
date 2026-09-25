@@ -1,0 +1,38 @@
+name: Reclassify events
+
+# Re-scores every active row in `events` against config/taxonomy.yaml
+# (relevance level, topic tags, exclusions) — see scripts/reclassify_events.py.
+# Run it by hand from the Actions tab after changing config/taxonomy.yaml.
+# Events scored not_relevant are discarded (hidden from the Events tab, row
+# kept). Uses the same secrets as gemini-discover.yml, so it runs against the
+# production database.
+#
+# Requires the relevance columns from supabase/events_relevance_migration.sql.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  reclassify:
+    runs-on: ubuntu-latest
+    # One quick, ungrounded Gemini call per active event — ~100 events takes
+    # a few minutes.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests==2.32.3 google-genai==2.23.0 pyyaml==6.0.2
+
+      - name: Reclassify events
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        working-directory: scripts
+        run: python reclassify_events.py

@@ -98,9 +98,15 @@ export interface EventItem {
   fit_analysis: string | null;
   url: string | null;
   source_type: string | null;
+  // Written by scripts/reclassify_events.py against config/taxonomy.yaml;
+  // null until an event has been scored.
+  relevance_level: RelevanceLevel | null;
+  relevance_rationale: string | null;
   first_seen_at: string;
   last_seen_at: string;
 }
+
+export type RelevanceLevel = "high" | "medium" | "low" | "not_relevant";
 
 export interface TrackerItem {
   id: string;

@@ -1,0 +1,715 @@
+# Gemini prompts used by scripts/gemini_discover.py — edit the wording here,
+# no code changes needed.
+#
+# Placeholders in {curly_braces} are filled in by the script at run time:
+#   {today}                           today's date (YYYY-MM-DD)
+#   {burn_profile}                    burn_profile from config/company.yaml
+#   {max_opportunities}               MAX_OPPORTUNITIES_PER_RUN
+#   {max_events}                      MAX_EVENTS_PER_RUN
+#   {max_items_per_opportunity_page}  MAX_ITEMS_PER_OPPORTUNITY_PAGE
+#   {max_events_per_page}             MAX_EVENTS_PER_PAGE (events from one fixed listing page)
+#   {core_topics}                     bulleted core_topics from config/taxonomy.yaml
+#   {primary_topics}                  bulleted primary_topics from config/taxonomy.yaml
+#   {secondary_topics}                bulleted secondary_topics from config/taxonomy.yaml
+#   {geography_priority}              numbered geography_priority list from config/company.yaml
+#   {fixed_opportunity_sources}       "- title: url" list from config/sources.yaml `sources`
+#   {fixed_event_sources}             "- Events listed on host: url" list from config/sources.yaml `event_sources`
+#   {url}, {title}                    the candidate being read (opportunity_extraction only)
+#
+# Any other braces — e.g. the JSON examples — are left exactly as written, so
+# write them normally (single braces, no escaping). Only lowercase
+# {names_like_this} from the list above are treated as placeholders.
+
+# Discovery (Google Search) — finds candidate funding/procurement opportunities.
+opportunity_discovery: |
+  Today's date is {today}. Use Google Search to find up to {max_opportunities} CURRENTLY OPEN funding or procurement
+  opportunities relevant to the company described below.
+
+  {burn_profile}
+
+  WHAT COUNTS AS AN OPPORTUNITY
+
+  A genuine, currently open funding or procurement call — an RFP, EOI, "Call for Solutions", call for proposals, tender, results-based financing call, grant round,
+  catalytic/concessional funding window, or similar — that provides money or a contract TO the company.
+  NOT a news article about funding already awarded, NOT an event, NOT a general announcement with no open call or application route attached.
+
+  Lean broad at this discovery stage — a detailed fit assessment happens later, per item, and a human reviews every opportunity before deciding whether to pursue it.
+  When a topically-relevant opportunity's exact fit is unclear at this stage, include it rather than filtering it out now.
+
+  Use the CORE, PRIMARY and SECONDARY themes below as the relevance framework. Search broadly for semantically related concepts and terminology, including calls that may not explicitly use these exact keywords.
+
+  Search these CORE topics first and most thoroughly. These represent the company's core business. A call with a substantive clean-cooking or carbon-finance component qualifies even if the overall
+  program is framed more broadly — e.g. an energy-access fund with a dedicated clean-cooking window, or a climate-finance facility that buys or pre-finances carbon credits.
+
+  CORE TOPICS:
+  - clean cooking (cookstoves, cooking-fuel access, eCooking, institutional and school cooking)
+  - results-based financing (RBF) for clean cooking
+  - carbon credits / carbon markets / carbon finance (including Article 6 and advance-purchase or offtake facilities)
+
+  Then search these PRIMARY topics thoroughly. This is a high-priority area, so actively search across all of them rather than stopping after finding the first few calls.
+
+  PRIMARY TOPICS:
+  - energy access
+  - clean / renewable energy
+  - energy transition
+  - climate finance
+
+  Once the CORE and PRIMARY topics have been adequately searched, use remaining search effort on SECONDARY topics. Relevant secondary-topic opportunities are still worth including,
+  but they should not crowd out stronger CORE or PRIMARY opportunities.
+
+  SECONDARY TOPICS:
+  - local manufacturing / industrialisation in Africa
+  - women / gender-focused climate or energy programs
+  - climate technology and innovation (including IoT / pay-as-you-go energy appliances)
+  - last-mile distribution
+
+  GEOGRAPHIC SEARCH PRIORITY
+
+  Search geographically in the following order.
+
+  1. OPPORTUNITIES OPEN TO OR SPECIFICALLY FOCUSED ON THESE COUNTRIES
+
+  Search each country individually and deliberately in this exact order. Do not assume that a country has been covered simply because an opportunity for that country appeared in another search result.
+
+  {geography_priority}
+
+  For EACH country above, perform targeted searches using the country name combined with relevant CORE and PRIMARY topics.
+
+  Do not stop after the first country or two merely because sufficient candidates have already been found.
+
+  2. AFRICA-WIDE / MULTI-COUNTRY AFRICAN OPPORTUNITIES
+
+  After the priority countries have been searched, search for:
+  - Africa-wide funds and calls
+  - multi-country / regional African programs (e.g. East Africa, West Africa, Sub-Saharan Africa)
+
+  3. INTERNATIONAL / GLOBAL OPPORTUNITIES
+
+  Only after the African priorities have been genuinely searched should you use remaining search effort for global calls with no particular African focus.
+
+  This ordering determines SEARCH PRIORITY and SEARCH EFFORT; it is NOT a hard geographic filter.
+
+  A global call can still qualify if African applicants or projects are eligible. It is especially relevant when it has a substantive Africa, emerging-market, clean-cooking,
+  carbon-market, or energy-access focus.
+
+
+  FIXED OPPORTUNITY SOURCES
+
+  The following funder/program pages are known sources of potentially relevant opportunities:
+
+  {fixed_opportunity_sources}
+
+  Use these fixed sources as an ADDITIONAL targeted discovery layer.
+
+  They do NOT replace broad Google Search.
+
+  For each fixed source:
+  - Search for currently open calls relevant to the topics and geographic priorities above.
+  - Do not assume a call is open merely because it appears on the website.
+  - Verify the call's deadline or open status, current round, and relevance.
+  - Prefer the specific call page as the final URL rather than the funder homepage or an article about the call.
+  - Apply exactly the same inclusion and exclusion criteria used for opportunities discovered through broader search.
+
+  SEARCH COVERAGE
+
+  Make a genuine effort to cover:
+  1. Every priority country listed above.
+  2. The CORE topics.
+  3. The PRIMARY topics.
+  4. The SECONDARY topics, using remaining search effort.
+  5. The fixed opportunity sources above.
+  6. Africa-wide and multi-country African opportunities.
+  7. Global opportunities open to African applicants when search budget remains.
+
+  Do not simply search for the company name.
+
+  Search using combinations of:
+  - topic + country
+  - topic + Africa
+  - topic + region
+  - topic + "call for proposals" / RFP / EOI / tender / grant / "results-based financing"
+  - specific industry terminology and semantic variations
+  - known funders, development-finance institutions, multilateral programs, and industry associations
+  - procurement portals and fixed opportunity-source websites
+
+  SOURCE QUALITY AND VERIFICATION
+
+  Prefer the funder's official website or the official call / tender page as the source URL.
+
+  Third-party grant aggregators, news articles, social-media posts, and newsletters may be useful for DISCOVERY, but when an official call page is available, use the official call page as the final URL and verify the call against it.
+
+  Do NOT use:
+  - search-result URLs
+  - generic organization homepages when a specific call page exists
+  - social-media URLs when an official call page exists
+  - news articles as the final URL when an official call page exists
+  - guessed or constructed URLs
+
+  The "url" field must be the actual call/source page found through search.
+
+  RECURRING CALLS
+
+  For recurring annual, periodic, or multi-round programs:
+  - Verify that the source refers to a CURRENTLY OPEN round.
+  - Confirm the current round's deadline rather than relying on a previous round.
+  - Do not include a closed round merely because the program has an active program page.
+  - A rolling call with no fixed deadline qualifies if the page clearly states it is currently accepting applications.
+
+  EXCLUSIONS
+
+  Do NOT include any of the following, even if a keyword technically matches:
+
+  - Announcements that someone has ALREADY won, received, or been awarded funding.
+  - Recaps of events, conferences, webinars, or partnerships, even if funding is mentioned.
+  - Job vacancies for permanent or fixed-term STAFF roles (a competitively tendered consultancy is still fine).
+  - Paid courses, training programmes, certifications, workshops, webinars, or masterclasses — anything the company would pay for rather than receive money or a contract from.
+  - Opportunities primarily about agriculture, forestry, or land use — on-farm equipment, agricultural inputs, crop or livestock production, agri-processing, or farm-level energy systems —
+  even where climate or energy is mentioned, UNLESS the call specifically funds clean cookstove manufacturing or distribution.
+  - Anything primarily about biodiversity, ecosystem services, or nature conservation, even if it uses market/credit language such as "biodiversity credits".
+  - Micro-loans, or funding explicitly reserved for small, early-stage, pre-revenue, or first-time operators that an established at-scale manufacturer could not apply for.
+  - Calls explicitly restricted to a single NON-African country or region with no route for African applicants or projects.
+  - Anything outside clean cooking, energy, climate, or carbon markets BY SECTOR — e.g. global health / public health / medical calls (including sexual and reproductive health), biotechnology or life-sciences research calls, or any other unrelated industry. A generic "call for proposals", "open call", or "network projects" framing does not make an off-sector call relevant — judge by what the funding is actually FOR, not the shape of the call.
+  - A call to recruit individual consultants, evaluators, or experts onto a roster/pool for a program that already exists — e.g. an "Open Roster of Expert Practitioners". This procures PEOPLE, not funding for the company's own operations, even when the program itself (clean cooking, eCooking, etc.) is squarely on-topic.
+  - A request for proposals to evaluate, audit, or review an EXISTING funded program on behalf of its funder or implementer — e.g. a "Mid-Term Evaluation" or "Terminal Evaluation" RFP. This funds an assessment of someone else's program, not the company's own manufacturing or distribution work.
+
+  DATE AND STATUS RULES
+
+  - The opportunity must be open as of {today}.
+  - Skip anything whose deadline is clearly before {today}.
+  - Skip pages that describe a call as closed, awarded, or suspended.
+  - Do not infer that a call is open merely because the program continues to exist.
+  - If the page contains conflicting deadlines and the current one cannot be resolved confidently, exclude it.
+  - An opportunity with no stated deadline may be included if the page clearly shows it is currently open (e.g. rolling applications).
+
+  QUALITY THRESHOLD
+
+  Do NOT pad the list to reach {max_opportunities} with off-topic items.
+
+  Return fewer opportunities when necessary.
+
+  Unlike events, partial or uncertain company fit is NOT a reason to exclude a genuinely open, on-topic call — fit is assessed later. Exclude only for the structural reasons above
+  (not open, not a real funding/procurement call, excluded category, or unverifiable).
+
+  Before returning an opportunity, ask:
+  1. Is it genuinely open right now?
+  2. Is the deadline or open status verified?
+  3. Is it a real funding or procurement call that provides money or a contract to the applicant?
+  4. Is it topically relevant to the CORE, PRIMARY, or SECONDARY relevance framework?
+  5. Could an established African clean-cookstove manufacturer and carbon project developer plausibly apply or be eligible?
+  6. Does it pass all geographic and exclusion rules?
+  7. Is the URL a specific, verified source page?
+  8. Is this the same underlying call as another candidate already selected?
+
+  If any of questions 1–7 is "no" or cannot be established confidently, or question 8 is "yes", exclude the opportunity.
+
+  DEDUPLICATION
+
+  Do not list the same underlying opportunity twice under different URLs OR under slightly different title wording.
+
+  If multiple pages refer to the same call:
+  - Treat them as one candidate.
+  - Prefer the official call page.
+  - Do not create separate candidates for different announcements, articles, or reposts of the same call unless they are genuinely distinct calls or lots.
+
+  OUTPUT
+
+  Respond with ONLY a JSON object. No markdown fences and no prose before or after the JSON.
+
+  Use exactly this structure:
+
+  {
+    "candidates": [
+      {
+        "title": "Opportunity name",
+        "url": "Official or verified call page URL",
+        "funder": "Funder or issuing organization",
+        "deadline": "Confirmed deadline, or 'Rolling' if the call is open with no fixed deadline",
+        "geography": "Eligible country, region, or Global",
+        "why_relevant": "Concise explanation of the specific relevance to BURN"
+      }
+    ]
+  }
+
+  OUTPUT RULES
+
+  - "title" must be the opportunity's actual name.
+  - "url" must be an actual source page found through search. Never invent, guess, or construct a URL.
+  - "deadline" must contain the confirmed current deadline, or "Rolling" when the page clearly states rolling applications.
+  - "why_relevant" should explain the concrete connection to BURN's business, not merely repeat keywords from the title.
+  - Do not include unsupported claims in "why_relevant".
+  - Do not include the same underlying opportunity twice.
+  - It is acceptable to return fewer than {max_opportunities} candidates.
+  - It is acceptable to return zero candidates.
+
+  If nothing qualifies after the search and validation process, respond with exactly:
+
+  { "candidates": [] }
+
+# Discovery (Google Search) — finds candidate upcoming industry events.
+event_discovery: |
+  Today's date is {today}. Use Google Search to find up to {max_events} UPCOMING industry events relevant to the company described below.
+
+  {burn_profile}
+
+  WHAT COUNTS AS AN EVENT
+
+  A genuine, upcoming (not already past) industry event with a specific date and venue/format — a conference, summit, forum, webinar, or trade show —
+  NOT a funding call, NOT a news article about a past event, NOT a general announcement with no scheduled date or format attached.
+  Events do NOT need to match the company profile as tightly as funding opportunities do (this is for general visibility/networking).
+
+  Use the CORE, PRIMARY and SECONDARY themes below as the relevance framework. Search broadly for semantically related concepts and terminology, including events that may not explicitly use these exact keywords.
+
+  Search these CORE topics first and most thoroughly. These represent the company's core business. An event with a substantive component on one of these topics qualifies even if the overall event is not explicitly 
+  framed as a climate event. For example, a finance-sector event with a dedicated carbon-removal or carbon-markets track may qualify.
+
+  CORE TOPICS:
+  {core_topics}
+
+  Then search these PRIMARY topics thoroughly. This is a high-priority area, so actively search across all of them rather than stopping after finding the first few events.
+
+  PRIMARY TOPICS:
+  {primary_topics}
+
+  Once the CORE and PRIMARY topics have been adequately searched, use remaining search effort on SECONDARY topics. Relevant secondary-topic events are still worth including, 
+  but they should not crowd out stronger CORE or PRIMARY events.
+
+  SECONDARY TOPICS:
+  {secondary_topics}
+
+  GEOGRAPHIC SEARCH PRIORITY
+
+  Search geographically in the following order.
+
+  1. EVENTS IN OR SPECIFICALLY FOCUSED ON THESE COUNTRIES
+
+  Search each country individually and deliberately in this exact order. Do not assume that a country has been covered simply because an event from that country appeared in another search result.
+
+  {geography_priority}
+
+  For EACH country above, perform targeted searches using the country name combined with relevant CORE and PRIMARY topics.
+
+  Do not stop after the first country or two merely because sufficient candidates have already been found.
+
+  2. AFRICA-WIDE / MULTI-COUNTRY AFRICAN EVENTS
+
+  After the priority countries have been searched, search for:
+  - Africa-wide events
+  - multi-country African events
+  - regional African industry events
+
+  3. INTERNATIONAL / GLOBAL EVENTS
+
+  Only after the African priorities have been genuinely searched should you use remaining search effort for international/global events with no particular African focus.
+
+  This ordering determines SEARCH PRIORITY and SEARCH EFFORT; it is NOT a hard geographic filter.
+
+  A strong international event can still qualify if it has clear business relevance. An international event outside Africa is especially relevant when it has a substantive Africa, 
+  emerging-market, carbon-market, clean-cooking, climate-finance, or development focus.
+
+
+  FIXED EVENT SOURCES
+
+  The following websites are known sources of potentially relevant events:
+
+  {fixed_event_sources}
+
+  Use these fixed sources as an ADDITIONAL targeted discovery layer.
+
+  They do NOT replace broad Google Search.
+
+  For each fixed source:
+  - Search for upcoming events relevant to the topics and geographic priorities above.
+  - Do not assume an event is upcoming merely because it appears on the website.
+  - Verify the event's date, year/edition, venue or format, and relevance.
+  - Prefer the specific event page as the final URL rather than the source homepage or an article about the event.
+  - Apply exactly the same inclusion and exclusion criteria used for events discovered through broader search.
+
+  SEARCH COVERAGE
+
+  Make a genuine effort to cover:
+  1. Every country in EVENT_GEOGRAPHY_PRIORITY.
+  2. The CORE topics.
+  3. The PRIMARY topics.
+  4. The SECONDARY topics, using remaining search effort.
+  5. The fixed event sources above.
+  6. Africa-wide and multi-country African events.
+  7. Strong international/global events when search budget remains.
+
+  Do not simply search for the company name.
+
+  Search using combinations of:
+  - topic + country
+  - topic + Africa
+  - topic + region
+  - topic + event/conference/summit/forum
+  - specific industry terminology and semantic variations
+  - known event organizers and industry associations
+  - fixed event-source websites
+
+  SOURCE QUALITY AND VERIFICATION
+
+  Prefer the official event organizer's website or official event page as the source URL.
+
+  Third-party event listings, news articles, social-media posts, and aggregators may be useful for DISCOVERY, but when an official event page is available, use the official event page as the final URL and verify the event against it.
+
+  Do NOT use:
+  - search-result URLs
+  - generic organization homepages when a specific event page exists
+  - social-media URLs when an official event page exists
+  - news articles as the final URL when an official event page exists
+  - guessed or constructed URLs
+
+  The "url" field must be the actual event/source page found through search.
+
+  RECURRING EVENTS
+
+  For recurring annual or periodic events:
+  - Verify that the source refers to the UPCOMING edition.
+  - Confirm the upcoming year's date rather than relying on a previous edition.
+  - Do not include a past edition merely because the organization has an active event-series page.
+  - If the current/upcoming edition cannot be verified, exclude it.
+
+  EXCLUSIONS
+
+  Do NOT include any of the following, even if a keyword technically matches:
+
+  - Generic diplomatic/policy commemorations, anniversaries, or broad multilateral/macroeconomic summits that aren't concrete clean-energy/climate/carbon-markets industry
+   events a company would actually attend for business purposes — e.g. a "High-Level Meeting to Commemorate the Nth Anniversary of [a Declaration]", 
+   the IMF/World Bank Annual Meetings, WEF Davos, or a G7/G20 finance-ministers meeting.
+
+  - General food-system, agriculture, or nutrition events — e.g. a "World Food Forum" — unless the event is specifically about clean-cooking fuel or technology.
+
+  - A narrow, single-fuel-or-technology industry trade event with no meaningful connection to clean cooking, climate finance, or carbon markets — 
+  e.g. a generic LPG/"Liquid Gas Week"-style conference, or a solar-power/photovoltaic-specific event such as "Solar Power Africa" or "Intersolar". 
+  BURN's core products are cooking appliances (LPG, biomass, electric induction, ethanol, charcoal) and carbon credits, not solar-power generation.
+
+  - Anything primarily about biodiversity, ecosystem services, or nature conservation, even if it uses market/credit language such as "biodiversity credits". 
+  This is a different focus area from BURN's clean-cooking and carbon-market business. Exclude it regardless of framing.
+
+  - A carbon-markets/climate/energy event that is explicitly regional to a single NON-African market with no stated Africa or emerging-market relevance — 
+  e.g. a US- or EU-only carbon-trading conference. A genuinely global/international event is still eligible if it has broader relevance.
+
+  - Academic or scientific RESEARCH conferences where the core activity is researchers presenting papers rather than business/industry engagement. 
+  This includes university- or academic-society-run conferences, IEEE/academic-proceedings conferences, and university department symposia. 
+  A mixed industry+research summit with clear corporate, funder, investor, or policy participation may qualify.
+
+  DATE AND STATUS RULES
+
+  - The event must be upcoming as of {today}.
+  - Skip anything whose event date is clearly before {today}.
+  - Skip event recaps or reports about events that already happened.
+  - Do not infer that an event is upcoming merely because the event series continues to exist.
+  - If the event date cannot be verified, exclude it.
+  - If the source contains conflicting dates and the upcoming date cannot be resolved confidently, exclude it.
+  - A multi-day event qualifies if its upcoming date range is confirmed.
+
+  QUALITY THRESHOLD
+
+  Do NOT pad the list to reach {max_events}.
+
+  Return fewer events when necessary.
+
+  A shorter list of high-confidence, genuinely relevant events is much more useful than a longer list containing weak matches, marginally related events, or events included merely to reach the maximum.
+
+  International/non-African events should be treated as optional bonus candidates after the African geographic priorities have received genuine search effort. Do not use them as filler.
+
+  Before returning an event, ask:
+  1. Is it genuinely upcoming?
+  2. Is the date/year verified?
+  3. Is the venue or format verified?
+  4. Is it a real industry/business/networking event?
+  5. Is there a plausible business reason for BURN to attend?
+  6. Does it fit the CORE, PRIMARY, or SECONDARY relevance framework?
+  7. Does it pass all geographic and exclusion rules?
+  8. Is the URL a specific, verified source page?
+  9. Is this the same underlying event as another candidate already selected?
+
+  If any answer is "no" or cannot be established confidently, exclude the event.
+
+  DEDUPLICATION
+
+  Do not list the same underlying event twice under different URLs OR under slightly different title wording — e.g. "African Energy Week 2026" and "Africa Energy Week 2026" naming the same conference, by the same organizer, on the same dates. Recognize these as ONE candidate, not two, even if your search turned up a separate page for each.
+
+  If multiple pages refer to the same event:
+  - Treat them as one candidate.
+  - Prefer the official event page.
+  - Do not create separate candidates for different sessions, announcements, or articles referring to the same event unless they are genuinely distinct events.
+
+  OUTPUT
+
+  Respond with ONLY a JSON object. No markdown fences and no prose before or after the JSON.
+
+  Use exactly this structure:
+
+  {
+    "candidates": [
+      {
+        "title": "Event name",
+        "url": "Official or verified event page URL",
+        "date": "Confirmed event date or date range",
+        "location": "City, country, or Online/Hybrid",
+        "format": "In-person, Online, or Hybrid",
+        "why_relevant": "Concise explanation of the specific business relevance to BURN"
+      }
+    ]
+  }
+
+  OUTPUT RULES
+
+  - "title" must be the event's actual name.
+  - "url" must be an actual source page found through search. Never invent, guess, or construct a URL.
+  - "date" must contain the confirmed upcoming event date or date range.
+  - "location" must identify the confirmed physical location or state Online/Hybrid where applicable.
+  - "format" must be In-person, Online, or Hybrid.
+  - "why_relevant" should explain the concrete connection to BURN's business, not merely repeat keywords from the event title.
+  - Do not include unsupported claims in "why_relevant".
+  - Do not include the same underlying event twice.
+  - It is acceptable to return fewer than {max_events} candidates.
+  - It is acceptable to return zero candidates.
+
+  If nothing qualifies after the search and validation process, respond with exactly:
+
+  { "candidates": [] }
+
+# Extraction (url_context + Google Search) — reads one opportunity page and
+# returns its structured fields. {url} and {title} are filled per candidate.
+opportunity_extraction: |-
+  Read the page at the URL below using your url_context tool, then extract a structured, OPEN funding or procurement opportunity from it, and assess how well it fits the company described below.
+
+  You also have Google Search available. The URL below often comes from a search-grounding redirect rather than the funder's own page, so it sometimes lands on the wrong thing — a general press-release index, a news list, a category/homepage, or a page that fails to load — instead of the specific "{title}" item. If url_context does not show you the specific opportunity itself (not a list, not an unrelated page, not empty/broken), use Google Search to find the correct, specific page for "{title}" — search by its name and, if known, its funder — then read THAT page with url_context instead of giving up. Only fall back to an empty result if, after actually trying to search for and read the specific page, you still cannot find real, extractable content about it.
+
+  Today's date is {today}. Use this — not any date you might otherwise assume — whenever you need to judge whether a stated deadline has already passed.
+
+  {burn_profile}
+
+  URL to read first: {url}
+  This page was already flagged as a likely "{title}" opportunity — confirm or correct that from the actual page content (or from the specific page you find via search, per above).
+
+  Respond with ONLY a JSON object — no markdown code fences, no explanation before or after — of the shape:
+  { "grants": [ { ... } ] }
+
+  Each item must have exactly these fields (use null for anything not stated — never guess or invent values):
+  {
+    "title": string,
+    "funder": string | null,
+    "amount": number | null,
+    "currency": string | null,
+    "deadline": string | null,        // ISO date "YYYY-MM-DD" only if a specific date is stated
+    "geography": string | null,
+    "focus_areas": string[],          // choose from: clean energy, clean cooking, climate change, GHG reduction, energy transition, deforestation, manufacturing, women/gender, tech & innovation, engineering, AI/data
+    "eligibility": string | null,
+    "description": string | null,     // 1-2 sentence neutral summary of the opportunity itself
+    "application_url": string | null, // the outbound link where you apply, if the page states one — otherwise use the URL you were given
+    "fit_analysis": string | null     // 2-4 sentences assessing how well THIS opportunity fits the company specifically
+  }
+
+  Rules for "fit_analysis":
+  - Write it as an analyst briefing the company's grants team, not marketing copy.
+  - Reference concrete matching points from the profile above where they apply: geography overlap, product/fuel-type match, carbon finance or gender-program fit, or distribution-network relevance.
+  - If something looks like a MISMATCH, say so plainly — e.g. it targets operators far smaller than the company's scale, the geography excludes its countries, it is an equity investment rather than a grant, or it is a consultancy/advisory assignment rather than funding for the company's own operations.
+  - If the page gives too little detail to judge fit, set this field to null rather than guessing.
+
+  A human reviews every opportunity you extract in the Grant Scanner before deciding whether to pursue it, and can discard anything irrelevant with one click. So lean toward EXTRACTING a genuine, open, on-topic funding/procurement opportunity even when: the company-fit looks partial, uncertain, or even like a real mismatch (e.g. it needs an accredited intermediary, targets a different tier of operator, or only partially overlaps the profile's geography or focus) — note that plainly in fit_analysis instead of returning nothing; or some secondary field (amount, exact deadline, eligibility) is thin or unstated — use null for that field rather than skipping the whole item. Only return { "grants": [] } for one of the specific structural reasons listed below, never merely because fit looks weak or details are incomplete.
+
+  Return { "grants": [] } — i.e. extract nothing — if the page is:
+  - Announcing that someone has ALREADY won, received or been awarded funding.
+  - A recap of an event, conference, webinar or partnership, even if funding is mentioned.
+  - A job vacancy for a permanent or fixed-term STAFF employee, rather than a competitively tendered consultancy.
+  - Advertising a paid course, training programme, certification, workshop, webinar or masterclass — not a grant, tender or funding opportunity that provides money or a contract TO the company.
+  - An opportunity whose stated deadline is before {today} (today).
+  - Primarily an agriculture, forestry or land-use opportunity, even where climate or energy is mentioned.
+  - Outside clean cooking, energy, climate, or carbon-markets BY SECTOR — e.g. global health / public health / medical funding (including sexual and reproductive health), biotechnology or life-sciences research calls, or any other industry unrelated to the company's business — even when it is a genuine, open, well-run funding call on its own terms.
+  - A call to recruit individual consultants, evaluators, or experts onto a roster/pool for a program that already exists (e.g. an "Open Roster of Expert Practitioners") — this procures PEOPLE, not funding for the company's own operations, regardless of how on-topic the underlying program is.
+  - A request for proposals to evaluate, audit, or review an EXISTING funded program on behalf of its funder (e.g. a "Mid-Term Evaluation" or "Terminal Evaluation" RFP) — a consultancy to assess someone else's program, not funding for the company.
+  - Not actually a funding/procurement opportunity at all (e.g. the page turned out to be unrelated, broken, or paywalled with no visible content).
+
+  If the page describes a single opportunity, extract exactly that one item. If the page is instead a LISTING or INDEX of several distinct open opportunities — e.g. a funder's "current calls" or "funding opportunities" page linking out to multiple separate programs — extract EACH genuinely distinct, currently-open one as its own separate item in the "grants" array, up to a maximum of {max_items_per_opportunity_page} items. Do not merge separate calls into one summary item, and do not invent items beyond what the page actually lists; if there are more distinct calls than the maximum, keep the ones that best fit the company profile above.
+
+# Extraction (url_context + Google Search) — reads one event page and returns
+# its structured fields. {url} and {title} are filled per candidate.
+event_extraction: |
+  Read and verify the industry event at the URL below using your url_context tool, then extract structured details about it.
+
+  Today's date is {today}. Use this date when determining whether the event is upcoming or has already occurred.
+
+  {burn_profile}
+
+  CANDIDATE
+  Title: "{title}"
+  URL: {url}
+
+  LISTING PAGES
+
+  If the Title above begins with "Events listed on", the URL is a known events-listing page (an organizer's or industry body's events/calendar page, or a homepage that lists events), not a single event.
+  For such a page, skip the single-event recovery steps below. Instead:
+  1. Read the page with url_context.
+  2. Identify EACH distinct upcoming event it lists.
+  3. For each one, follow its own event page (or use Google Search) where needed to confirm its date, venue/format, and details.
+  4. Apply the same VALIDATION, EXCLUSIONS, and DATE RULE below to each event individually, and keep only events with a plausible business reason for the company above to attend.
+  5. Return each qualifying event as its own item, up to a maximum of {max_events_per_page}. If more qualify, keep the ones that best fit the company profile above.
+  Do not merge separate events into one item, and do not invent events the page does not list. If none qualify, return an empty result.
+
+  Otherwise, the candidate names one specific event — follow the steps below and return at most one item.
+
+  VERIFICATION AND URL RECOVERY
+
+  The supplied URL may come from Google Search grounding and may not be the event's actual page. It may instead lead to a press-release index, news page, category page, homepage, unrelated content, or a broken/empty page.
+
+  1. First read the supplied URL with url_context.
+  2. If it clearly contains the specific "{title}" event, use it.
+  3. If it does not contain the specific event, use Google Search to find the correct event page. Search using the event title and, where useful, the organizer, date, location, or other identifying details.
+  4. If multiple similarly named events exist, verify the identity using the organizer, date, location, and event description before selecting a page.
+  5. Read the specific event page you find with url_context.
+  6. Only return an empty result if you cannot find reliable, extractable information about the specific event after genuinely attempting this recovery process.
+
+  Do not silently substitute a different event with a similar name.
+
+  VALIDATION
+
+  The candidate must be a genuine, specific industry/business event.
+
+  Return an empty result if:
+  - the event has already occurred as of {today};
+  - it is a funding/procurement opportunity, RFP, tender, or call for proposals;
+  - it is not a specific event;
+  - the page is broken, unrelated, generic, or only describes an organization/event series without a specific upcoming event;
+  - the event falls into one of the exclusion categories below.
+
+  For recurring events, verify that the page refers to the upcoming edition/year rather than a previous edition or generic event-series page.
+
+  EXCLUSIONS
+
+  Exclude:
+
+  - Generic diplomatic/policy commemorations, anniversaries, or broad multilateral/macroeconomic summits rather than concrete clean-energy, climate, or carbon-markets industry events — e.g. IMF/World Bank Annual Meetings, WEF Davos, G7/G20 finance-ministers meetings, or commemorative diplomatic meetings.
+  - General food-system, agriculture, or nutrition events unless specifically focused on clean-cooking fuel or technology.
+  - Narrow single-fuel or technology events with no meaningful connection to clean cooking, climate finance, or carbon markets — e.g. generic LPG/Liquid Gas events or solar-only/photovoltaic events such as Solar Power Africa or Intersolar.
+  - Biodiversity, ecosystem-services, nature-conservation, or biodiversity-credit events.
+  - Carbon/climate/energy events explicitly restricted to a single non-African market with no Africa or emerging-market relevance. Genuinely global/international events remain eligible.
+  - Academic or scientific research conferences primarily centered on researchers presenting papers. Mixed industry/research events with clear corporate, investor, funder, or policy participation may qualify.
+
+  OUTPUT
+
+  Respond with ONLY a JSON object — no markdown fences and no explanation — using exactly this structure:
+
+  {
+    "events": [
+      {
+        "title": string,
+        "url": string | null,
+        "organizer": string | null,
+        "event_type": string | null,
+        "format": string | null,
+        "start_date": string | null,
+        "end_date": string | null,
+        "location": string | null,
+        "geography": string | null,
+        "focus_areas": string[],
+        "description": string | null,
+        "fit_analysis": string | null
+      }
+    ]
+  }
+
+  FIELD RULES
+
+  "title"
+  Use the actual event name confirmed from the event page.
+
+  "url"
+  The specific event's own page that you actually read or found via search — for a listing page, each event's own page, not the listing page itself. Use null if the event has no page of its own. Never invent or construct a URL.
+
+  "organizer"
+  Use the named event organizer if stated. Otherwise null. Do not infer an organizer.
+
+  "event_type"
+  Use the event's stated or clearly supported type, such as conference, summit, webinar, workshop, forum, or trade show. Otherwise null.
+
+  "format"
+  Use only:
+  - "virtual"
+  - "in-person"
+  - "hybrid"
+
+  Only use a value when the page explicitly states or clearly establishes the format. Otherwise null.
+
+  "start_date"
+  Use ISO format YYYY-MM-DD. Only use a date supported by the source.
+
+  "end_date"
+  Use ISO format YYYY-MM-DD for a multi-day event. Use null for a single-day event or when no end date is stated.
+
+  "location"
+  Use the physical city/venue when stated. For virtual events use "Online" if explicitly stated. Otherwise null.
+
+  "geography"
+  Identify the specific country the event is held in or specifically focused on.
+
+  Use this priority:
+  1. Confirmed event location.
+  2. Explicit geographic focus of the event.
+  3. Unambiguous geographic focus in the event title or description.
+
+  For virtual events, use the country the event specifically focuses on when that is clear.
+
+  Prefer a specific country such as "Kenya" or "Nigeria" over a broad region such as "Africa" or "West Africa".
+
+  Use "Africa", "East Africa", etc. only when the event genuinely spans multiple countries without a single specific country focus.
+
+  Use "International" or "Global" only when there is no particular country or regional focus.
+
+  Use null only when no geographic signal can be established from the event page, title, or description.
+
+  Do not infer event geography solely from the organizer's country when the event itself has a different or broader geographic focus.
+
+  "focus_areas"
+  Select ONLY applicable values from this controlled vocabulary:
+  - clean energy
+  - clean cooking
+  - climate change
+  - GHG reduction
+  - energy transition
+  - deforestation
+  - manufacturing
+  - women/gender
+  - tech & innovation
+  - engineering
+  - AI/data
+
+  Do not create new categories.
+
+  "description"
+  Provide a neutral 1–2 sentence summary of what the event is about, based only on information supported by the source.
+
+  "fit_analysis"
+  Provide 2–4 concise sentences explaining the event's relevance to BURN's business.
+
+  Base this only on concrete evidence from the event and the company profile, such as:
+  - carbon finance/carbon markets
+  - clean cooking
+  - energy access
+  - clean energy
+  - relevant geography
+  - manufacturing
+  - technology
+  - likely business, investor, funder, policy, or partnership relevance explicitly indicated by the event
+
+  Do not invent attendees, sponsors, funders, partnerships, or business opportunities that the source does not support.
+
+  If the event is a weak or indirect fit, say so plainly rather than overstating relevance.
+
+  If there is insufficient information to assess the fit reliably, set "fit_analysis" to null.
+
+  DATE RULE
+
+  Do not include an event whose confirmed end date is before {today}.
+
+  If the event is currently underway on {today}, treat it as NOT upcoming and return an empty result.
+
+  If the date cannot be established reliably, set the relevant date field to null; if this prevents determining whether the event is upcoming, return an empty result.
+
+  For a single-event candidate, return exactly one event item when it is valid. For a listing page, return one item per qualifying event, up to {max_events_per_page}.
+
+  Otherwise return:
+
+  { "events": [] }

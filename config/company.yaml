@@ -1,0 +1,46 @@
+# Company details used by scripts/gemini_discover.py — edit here, no code
+# changes needed.
+
+# The company profile Gemini assesses fit against. Filled into the prompts in
+# config/prompts.yaml as {burn_profile}.
+#
+# NOTE: scripts/scan.mjs, scripts/social_discover.py and
+# components/DraftApplication.tsx each still keep their own copy of this
+# profile — update those too if BURN's profile changes.
+burn_profile: |-
+  BURN Manufacturing — company profile for grant-fit assessment:
+  - Products: manufactures and distributes clean cookstoves across every major fuel type — LPG gas, biomass/wood, electric induction (IoT-enabled), ethanol, charcoal, 
+  and institutional-scale stoves — plus cookware.
+  - Manufacturing & scale: owns factories in Kenya and Nigeria (plus Asia), 450K+ units/month capacity, ships orders from 3,000 to 1M+ units. This is an established, at-scale manufacturer —
+   NOT an early-stage or pre-revenue startup.
+  - Track record: 7.4M+ stoves sold, 37.5M+ lives impacted, 56.7K+ jobs created since 2013, 81M+ tons of CO2 reduced.
+  - Geography: operates across 20+ African countries (home delivery in 9, B2B sales in 8, call centers in 10, carbon projects in 10).
+  - Carbon finance: a vertically integrated carbon project developer, 5M+ carbon credits issued, certified by Gold Standard and MMECD — strong fit for carbon finance, results-based financing, 
+  and climate-linked funding.
+  - Distribution: an established last-mile distribution network across its countries of operation.
+  - Gender: products and programs center women as primary household cooking-fuel decision-makers and beneficiaries.
+  - Funding BURN typically seeks: grants, catalytic/concessional funding, results-based financing, R&D funding, and scale-up/working capital. BURN is generally NOT a fit for micro-loans 
+  or funding explicitly reserved for small/early-stage/first-time operators.
+  - Strong-fit program patterns: results-based financing (RBF) programs for clean cooking, calls for proposals / "Call4Solutions" / tenders specifically for cookstove distribution or manufacturing, 
+  institutional and school-cooking programs, and higher-tier/modern eCooking scale-up programs.
+  - Agriculture is generally NOT a fit: BURN is a clean cookstove company, not an agriculture company. Funding primarily for on-farm equipment, agricultural inputs, crop or livestock production, 
+  agri-processing, or farm-level energy systems is a poor fit — even if it touches climate or energy — UNLESS it specifically funds clean cookstove manufacturing or distribution.
+
+# Priority countries, searched in this exact order before Africa-wide and then
+# international items. Filled into the prompts as {geography_priority}.
+#
+# NOTE: keep this in sync with GEOGRAPHY_PRIORITY in
+# components/EventsScanner.tsx (same order), which sorts and filters the
+# Events tab by it.
+geography_priority:
+  - Kenya
+  - Tanzania
+  - Ghana
+  - Zambia
+  - Nigeria
+  - Malawi
+  - Mozambique
+  - Rwanda
+  - Burundi
+  - Ethiopia
+  - Ivory Coast

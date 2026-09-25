@@ -11,6 +11,20 @@ sources:
     url: "https://mitigation-action.org/call-for-projects-2026/#application"
   - title: "FOREST Partnership — FOREST Pathways Joint Call 2026"
     url: "https://forest-partnership.eu/jointcall2026/"
+  # Added 2026-09-24. All five are listing/archive pages rather than
+  # single-call pages, so opportunity_extraction's "extract each distinct
+  # open call separately, up to MAX_ITEMS_PER_OPPORTUNITY_PAGE" branch does
+  # the work here; the titles are page labels only.
+  - title: "EnDev — Calls Archive"
+    url: "https://endev.info/calls/"
+  - title: "AVSI Foundation — Calls and Tenders"
+    url: "https://www.avsi.org/en/calls-tenders"
+  - title: "Grand Challenges Canada — Apply for Funding"
+    url: "https://www.grandchallenges.ca/apply-for-funding/"
+  - title: "Global Innovation Fund — Apply for Funding"
+    url: "https://www.globalinnovation.fund/apply-for-funding"
+  - title: "AAU Chinnova — Grants Management System"
+    url: "https://grants.chinnova.aau.org/"
 
 event_sources:
   - "https://www.ieta.org/events"
@@ -38,3 +52,16 @@ event_sources:
   - "https://naccnigeria.org/events/"
   - "https://africaclimateforum.com/"
   - "https://www.eaif.energy/"
+  - "https://theenergyyear.com/timeline/"
+  - "https://www.worldclimatefoundation.org/roadmap"
+  - "https://onestopesg.com/esg-events"
+  - "https://emitree.com/carbon-removal-conferences"
+  - "https://emitree.com/carbon-market-conferences"
+  - "https://emitree.com/esg-conferences"
+  - "https://emitree.com/energy-efficiency-conferences"
+  - "https://graindc.org/events/"
+  - "https://globalsouthexpo.com/events?timeFilter=upcoming&industryIds=697e42a35284ca3f372dea81%2C6967489ebb9678f2ed779540%2C6967489ebb9678f2ed779555"
+  - "https://wearevuka.com/calendar/"
+  - "https://conference.eik.co.ke/"
+  - "https://aweik.or.ke/eventhub/en/"
+  - "https://www.esi-africa.com/events/"

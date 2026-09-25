@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { FOCUS_AREAS, EventItem } from "@/lib/types";
+import { FOCUS_AREAS, EventItem, RelevanceLevel } from "@/lib/types";
 
 // Explicit country priority order, per user request: search and display
 // results in this order, then broader Africa-wide events, then everything
@@ -38,6 +38,25 @@ const GEOGRAPHY_FILTER_OPTIONS = [
 
 const EVENT_TYPE_OPTIONS = ["Any type", "Conference", "Summit", "Forum", "Webinar", "Workshop", "Trade show"];
 const FORMAT_OPTIONS = ["Any format", "Virtual", "In-person", "Hybrid"];
+
+// Relevance comes from scripts/reclassify_events.py (scored against
+// config/taxonomy.yaml). It's a badge + filter only — the list stays in date
+// order, per the sort note below. "not_relevant" events are discarded by that
+// script, so they never reach this list.
+const RELEVANCE_FILTERS: { label: string; matches: (level: RelevanceLevel | null) => boolean }[] = [
+  { label: "Any relevance", matches: () => true },
+  { label: "High only", matches: (l) => l === "high" },
+  { label: "High & medium", matches: (l) => l === "high" || l === "medium" },
+  { label: "Medium", matches: (l) => l === "medium" },
+  { label: "Low", matches: (l) => l === "low" },
+  { label: "Not yet scored", matches: (l) => l === null },
+];
+
+const RELEVANCE_BADGE: Partial<Record<RelevanceLevel, { label: string; className: string }>> = {
+  high: { label: "High", className: "bg-emerald-50 text-emerald-700" },
+  medium: { label: "Medium", className: "bg-amber-50 text-amber-700" },
+  low: { label: "Low", className: "bg-neutral-100 text-neutral-600" },
+};
 
 // Older rows (and any future extraction slip-up) can still land with a broad
 // region like "Africa"/"West Africa" in event.geography even though the
@@ -89,6 +108,7 @@ export default function EventsScanner() {
   const [geographyFilter, setGeographyFilter] = useState(GEOGRAPHY_FILTER_OPTIONS[0]);
   const [eventTypeFilter, setEventTypeFilter] = useState(EVENT_TYPE_OPTIONS[0]);
   const [formatFilter, setFormatFilter] = useState(FORMAT_OPTIONS[0]);
+  const [relevanceFilter, setRelevanceFilter] = useState(RELEVANCE_FILTERS[0].label);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [discardingId, setDiscardingId] = useState<string | null>(null);
 
@@ -158,6 +178,8 @@ export default function EventsScanner() {
         if (formatFilter !== FORMAT_OPTIONS[0]) {
           if (!e.format || !e.format.toLowerCase().includes(formatFilter.toLowerCase())) return false;
         }
+        const relevance = RELEVANCE_FILTERS.find((f) => f.label === relevanceFilter);
+        if (relevance && !relevance.matches(e.relevance_level ?? null)) return false;
         return true;
       })
       .sort((a, b) => {
@@ -172,7 +194,7 @@ export default function EventsScanner() {
         if (dateDiff !== 0) return dateDiff;
         return geographyRank(a) - geographyRank(b);
       });
-  }, [events, activeFocusAreas, geographyFilter, eventTypeFilter, formatFilter]);
+  }, [events, activeFocusAreas, geographyFilter, eventTypeFilter, formatFilter, relevanceFilter]);
 
   async function discardEvent(event: EventItem) {
     if (!window.confirm(`Discard "${event.title}"? It will stop showing up in this list.`)) return;
@@ -273,6 +295,18 @@ export default function EventsScanner() {
               ))}
             </select>
           </label>
+          <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-[var(--ink-muted)]">
+            Relevance
+            <select
+              value={relevanceFilter}
+              onChange={(e) => setRelevanceFilter(e.target.value)}
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-800"
+            >
+              {RELEVANCE_FILTERS.map((opt) => (
+                <option key={opt.label}>{opt.label}</option>
+              ))}
+            </select>
+          </label>
         </div>
       </section>
 
@@ -309,6 +343,7 @@ export default function EventsScanner() {
       <div className="flex flex-col gap-4">
         {filteredEvents.map((event) => {
           const open = expandedId === event.id;
+          const badge = event.relevance_level ? RELEVANCE_BADGE[event.relevance_level] : undefined;
           return (
             <article
               key={event.id}
@@ -327,6 +362,14 @@ export default function EventsScanner() {
                   </h3>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
+                  {badge && (
+                    <span
+                      title={event.relevance_rationale ?? undefined}
+                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${badge.className}`}
+                    >
+                      {badge.label} relevance
+                    </span>
+                  )}
                   <span className="rounded-full bg-green-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-700">
                     Gemini
                   </span>
@@ -384,6 +427,15 @@ export default function EventsScanner() {
                         Fit for BURN
                       </p>
                       <p className="mt-1 text-sm text-neutral-700">{event.fit_analysis}</p>
+                    </div>
+                  )}
+
+                  {badge && event.relevance_rationale && (
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--ink-muted)]">
+                        Why {badge.label.toLowerCase()} relevance
+                      </p>
+                      <p className="mt-1 text-sm text-neutral-600">{event.relevance_rationale}</p>
                     </div>
                   )}
 

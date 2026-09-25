@@ -19,6 +19,13 @@ extraction), and GitHub Actions (scheduled scraping).
   `grants` (tagged `source_type='gemini'`, shown with a green "Gemini" pill in the
   Grant Scanner); events go into the separate `events` table, shown only in the
   Events tab.
+- `config/sources.yaml` — fixed opportunity and event sources `gemini_discover.py`
+  checks on every run, regardless of what the broad search finds (the event
+  sources are ported from climate-cooking-watch's own trusted-source list).
+  Edit freely; no code changes needed.
+- `config/taxonomy.yaml` — the primary/secondary event topic lists
+  `gemini_discover.py`'s discovery prompt searches for. Edit freely; no code
+  changes needed.
 - `supabase/schema.sql` — the core database schema (already applied via the SQL Editor).
 - `supabase/policies.sql` — Row Level Security policies (run once, after schema.sql).
 - `supabase/events_schema.sql` — the `events` table + its RLS policies (run once,

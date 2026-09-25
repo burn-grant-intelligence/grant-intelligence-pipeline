@@ -20,14 +20,14 @@ jobs:
     # A real run at the old 15-candidate cap (already using the url_context +
     # google_search combo) took about 3 minutes end to end — roughly 12s per
     # candidate including GEMINI_PACING_SECONDS. At today's per-run ceiling —
-    # 4 fixed opportunity sources + 24 fixed event sources (config/sources.yaml)
-    # + up to 15 discovered opportunities + 25 discovered events = up to 68
-    # extraction calls — that same rate projects to ~14 minutes; 20 gives
-    # headroom for retries/slower fetches without leaving the job free to run
-    # indefinitely. If real runs start timing out here, that's the signal to
-    # trim MAX_EVENTS_PER_RUN (or the event_sources list) back down rather
-    # than just raising this further.
-    timeout-minutes: 20
+    # 4 fixed opportunity sources + 38 fixed event sources (config/sources.yaml)
+    # + up to 15 discovered opportunities + 50 discovered events = up to 107
+    # extraction calls, plus 2 discovery calls — that same rate projects to
+    # ~22 minutes; 40 gives headroom for retries/slower fetches without
+    # leaving the job free to run indefinitely. If real runs start timing out
+    # here, that's the signal to trim MAX_EVENTS_PER_RUN (or the
+    # event_sources list) back down rather than just raising this further.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 

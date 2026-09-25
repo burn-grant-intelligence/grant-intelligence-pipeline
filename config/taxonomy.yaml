@@ -1,10 +1,17 @@
 
 
-# Primary topics — search these thoroughly, first.
-primary_topics:
+
+# Core topics — BURN Manufacturing's core business (generating and selling
+# carbon credits from clean cookstove distribution). Search these first; an
+# event substantively about one of these is "high" relevance.
+core_topics:
   - carbon markets (carbon removal, carbon credits, carbon offsetting, carbon registries)
-  - climate
   - clean cooking (cookstoves, cooking-fuel access)
+
+
+# Primary topics — search these thoroughly, after the core topics.
+primary_topics:
+  - climate
   - energy
   - development finance
   - environmental, social and governance (ESG)
@@ -16,3 +23,57 @@ secondary_topics:
   - impact investment
   - gender and inclusive development
   - Africa / emerging-market development
+
+
+# Used by classify_event() in scripts/gemini_discover.py — both when
+# discovery saves a new event and when scripts/reclassify_events.py
+# re-scores existing ones. Shown in the Events tab as a relevance badge and
+# filter. Keep "high" genuinely selective: it should be the short list worth
+# someone's attention first, not most events.
+relevance_levels:
+  high: >
+    BOTH of these must hold. (1) The event's actual subject matter (not just
+    its title) is substantively about a core topic — a dedicated carbon-market
+    or clean-cooking track, program, or theme, not a passing mention. This
+    holds even if it isn't otherwise framed as a climate conference, e.g. a
+    finance-sector event with a dedicated carbon-removal component. (2) It is
+    held in Africa, is specifically focused on Africa or emerging markets, or
+    is a genuinely global/international event with clear Africa or
+    emerging-market relevance. A general energy, renewable-energy,
+    sustainability, or ESG event is NOT high, however well it fits BURN's
+    geography — that is medium at most.
+  medium: >
+    Not high, but substantively about a primary topic, or strongly connected
+    to a secondary topic, AND held in or relevant to Africa/emerging markets
+    or genuinely global. This includes broader clean/renewable energy events
+    (grid electricity, energy storage, EVs, energy access), broad climate
+    events (climate policy, adaptation, general advocacy), and ESG or
+    sustainability events. It also includes a core-topic event outside Africa
+    that is international but has no particular Africa or emerging-market
+    angle.
+  low: >
+    Weak or general relevance — mentions a relevant topic in passing, or is
+    only tangentially connected (e.g. a broad economic-development
+    conference with no substantive climate/energy/cooking content, or a
+    mining / oil-and-gas event with only a minor energy-transition track). Also
+    a primary-topic event outside Africa with no Africa or emerging-market
+    angle.
+  not_relevant: >
+    No real connection beyond surface keyword overlap — e.g. a generic
+    business or tech conference that happens to use words like "climate" or
+    "sustainability" in an unrelated sense, with nothing to do with the
+    core, primary or secondary topics above. ALSO any event matching one of
+    the exclusions below, regardless of topic — even a carbon-markets event.
+    An event scored not_relevant is discarded from the Events tab.
+
+
+# Always not_relevant, whatever the topic. These mirror the exclusion rules
+# in config/prompts.yaml's event prompts, so events that slip past discovery
+# or extraction are caught here too.
+exclusions:
+  - A carbon, climate, energy, or sustainability event explicitly limited to one non-African country or region (e.g. Europe-only, UK-only, US/North America-only, Japan-only) with no stated Africa or emerging-market relevance — e.g. "Carbon Unbound Europe", a US- or EU-only carbon-trading conference. A genuinely global/international event is NOT excluded by this rule.
+  - A generic diplomatic/policy commemoration or anniversary, or a broad multilateral/macroeconomic summit rather than a concrete clean-energy, climate, or carbon-markets industry event — e.g. IMF/World Bank Annual Meetings, WEF Davos, G7/G20 finance-ministers meetings.
+  - A general food-system, agriculture, or nutrition event, unless it is specifically about clean-cooking fuel or technology.
+  - A narrow single-fuel or single-technology trade event with no meaningful connection to clean cooking, climate finance, or carbon markets — e.g. a generic LPG/"Liquid Gas Week" conference, or a solar-power-generation/photovoltaic event such as "Solar Power Africa" or "Intersolar". An off-grid energy-access event that substantively covers appliances or eCooking is not "solar-only".
+  - An event primarily about biodiversity, ecosystem services, or nature conservation, even if it uses market/credit language such as "biodiversity credits".
+  - An academic or scientific research conference centred on researchers presenting papers (university- or academic-society-run, IEEE/academic proceedings). A mixed industry/research event with clear corporate, investor, funder, or policy participation is not excluded.

@@ -98,15 +98,9 @@ export interface EventItem {
   fit_analysis: string | null;
   url: string | null;
   source_type: string | null;
-  // Written by scripts/reclassify_events.py against config/taxonomy.yaml;
-  // null until an event has been scored.
-  relevance_level: RelevanceLevel | null;
-  relevance_rationale: string | null;
   first_seen_at: string;
   last_seen_at: string;
 }
-
-export type RelevanceLevel = "high" | "medium" | "low" | "not_relevant";
 
 export interface TrackerItem {
   id: string;
@@ -122,6 +116,13 @@ export interface TrackerItem {
   // "unreviewed" until someone sets it in the Eligibility Tracker tab.
   fit_status?: FitStatus;
   fit_notes?: string | null;
+  // Manual "draft anyway" escape hatch (supabase/draft_override_migration_2026-09-25.sql).
+  // Draft Application only shows items with fit_status === "fit" by default
+  // — this lets someone force an unreviewed or not-fit item in there anyway
+  // for a specific case, without changing the actual fit_status/fit_notes
+  // record in the Eligibility Tracker. Defaults to false; optional because
+  // it's a newer column that may not exist on every row yet.
+  draft_override?: boolean;
   created_at: string;
   updated_at: string;
   grant: Grant | null;

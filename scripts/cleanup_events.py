@@ -119,16 +119,23 @@ def discard(ids: list[str]) -> None:
         ).raise_for_status()
 
 
-def delete(ids: list[str]) -> None:
+def delete(ids: list[str]) -> bool:
+    """Returns False (after printing Supabase's reason) if the database
+    refuses the delete — e.g. a 403 when the key's role has no DELETE grant
+    on `events` (see supabase/events_relevance_migration.sql)."""
     # Batched to keep the URL short.
     for i in range(0, len(ids), 50):
         batch = ids[i : i + 50]
-        requests.delete(
+        response = requests.delete(
             f"{g.SUPABASE_URL}/rest/v1/events",
             headers=HEADERS,
             params={"id": f"in.({','.join(batch)})"},
             timeout=30,
-        ).raise_for_status()
+        )
+        if not response.ok:
+            print(f"  ! delete refused ({response.status_code}): {response.text[:300]}")
+            return False
+    return True
 
 
 def main() -> None:
@@ -156,11 +163,19 @@ def main() -> None:
         print("\nDry run — nothing changed. Re-run with --apply to make these changes.")
         return
 
-    delete([e["id"] for e in past])
-    discard([e["id"] for e, _ in duplicates] + [e["id"] for e in mills])
+    past_ids_list = [e["id"] for e in past]
+    deleted = delete(past_ids_list) if past_ids_list else True
+    to_discard = [e["id"] for e, _ in duplicates] + [e["id"] for e in mills]
+    if not deleted:
+        # Couldn't delete — hide them instead so the rest of the cleanup still
+        # happens. Grant DELETE (events_relevance_migration.sql) to delete them
+        # properly on the next run.
+        print("  ! discarding the past events instead of deleting them")
+        to_discard += past_ids_list
+    discard(to_discard)
     print(
-        f"\nDone. Deleted {len(past)} past event(s); discarded {len(duplicates)} duplicate(s) "
-        f"and {len(mills)} conference-mill listing(s)."
+        f"\nDone. {'Deleted' if deleted else 'Discarded (delete not permitted)'} {len(past)} past event(s); "
+        f"discarded {len(duplicates)} duplicate(s) and {len(mills)} conference-mill listing(s)."
     )
 
 

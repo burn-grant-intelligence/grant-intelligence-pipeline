@@ -26,3 +26,9 @@ alter table events add column if not exists secondary_topics text[] default '{}'
 alter table events add column if not exists relevance_level text
   check (relevance_level in ('high', 'medium', 'low', 'not_relevant'));
 alter table events add column if not exists relevance_rationale text;
+
+-- scripts/cleanup_events.py deletes events that ended over a week ago. The
+-- scripts use the service-role key; without this grant the delete fails with
+-- a 403 (seen in production 2026-09-25). Anon (the browser) still can't
+-- delete: there's no delete RLS policy for it.
+grant delete on table events to service_role;

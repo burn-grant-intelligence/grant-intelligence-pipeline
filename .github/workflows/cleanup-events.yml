@@ -1,0 +1,38 @@
+name: Clean up events
+
+# On-demand version of the cleanup step that already runs after every Gemini
+# discovery run: deletes events that ended more than a week ago, and discards
+# (hides, keeps the row) duplicate copies and conference-mill listings. See
+# scripts/cleanup_events.py. Leave "apply" unticked for a dry run that only
+# lists what it would change.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply the changes (untick for a dry run that only lists them)"
+        type: boolean
+        default: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests==2.32.3 google-genai==2.23.0 pyyaml==6.0.2
+
+      - name: Clean up events
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        working-directory: scripts
+        run: python cleanup_events.py ${{ inputs.apply && '--apply' || '' }}

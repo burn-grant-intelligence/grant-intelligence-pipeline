@@ -436,9 +436,19 @@ def _parse_date(value):
         return None
 
 
-def _titles_match(a: set[str], b: set[str]) -> bool:
+def _titles_match(a: set[str], b: set[str], min_overlap: float = EVENT_DUPLICATE_MIN_OVERLAP) -> bool:
+    if not a or not b:
+        return False
     shared = len(a & b)
-    return shared >= 2 and shared / min(len(a), len(b)) >= EVENT_DUPLICATE_MIN_OVERLAP
+    return shared >= 2 and shared / min(len(a), len(b)) >= min_overlap
+
+
+# Looser title agreement needed when organizer AND exact dates already match
+# (find_duplicate_event_id): enough for "African Energy Week" vs "Africa
+# Energy Week" (2 of 3 words), not for one organizer's parallel events on the
+# same days, e.g. "World Climate Summit COP31" vs "World Climate Impact Hub"
+# (2 of 4).
+EVENT_DUPLICATE_SAME_ORGANIZER_OVERLAP = 0.6
 
 
 def _is_near_duplicate_event(title: str, start_date) -> str | None:
@@ -571,7 +581,9 @@ def normalize_organizer(name: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", name.lower())
 
 
-def find_duplicate_event_id(organizer: str | None, start_date: str | None, end_date: str | None) -> str | None:
+def find_duplicate_event_id(
+    organizer: str | None, start_date: str | None, end_date: str | None, title: str = ""
+) -> str | None:
     """Looks for an existing `events` row that's almost certainly the same
     real-world event as the one just extracted, even when its title text is
     genuinely different — e.g. "African Energy Week 2026" vs "Africa Energy
@@ -583,7 +595,9 @@ def find_duplicate_event_id(organizer: str | None, start_date: str | None, end_d
     Same organizer + identical start_date + identical end_date is a much
     higher-precision "same event" signal than fuzzy title matching — two
     unrelated real events sharing an organizer AND exact matching dates is
-    vanishingly unlikely. Requires both an organizer and a start_date;
+    vanishingly unlikely — except for one organizer's parallel events on the
+    same days (a summit and its side "hub"), so the titles must also broadly
+    agree (EVENT_DUPLICATE_SAME_ORGANIZER_OVERLAP). Requires both an organizer and a start_date;
     returns None (fall through to the normal title_key upsert) when either
     is missing, rather than guessing off partial data.
 
@@ -604,7 +618,7 @@ def find_duplicate_event_id(organizer: str | None, start_date: str | None, end_d
                 "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
             },
             params={
-                "select": "id,organizer",
+                "select": "id,organizer,title",
                 "start_date": f"eq.{start_date}",
                 "end_date": f"eq.{end_date}" if end_date else "is.null",
             },
@@ -614,8 +628,11 @@ def find_duplicate_event_id(organizer: str | None, start_date: str | None, end_d
     except Exception as err:
         print(f"    ! could not check for duplicate events: {err}")
         return None
+    tokens = _title_tokens(title)
     for existing in response.json():
-        if normalize_organizer(existing.get("organizer")) == org_key:
+        if normalize_organizer(existing.get("organizer")) == org_key and _titles_match(
+            tokens, _title_tokens(existing.get("title") or ""), EVENT_DUPLICATE_SAME_ORGANIZER_OVERLAP
+        ):
             return existing["id"]
     return None
 
@@ -628,12 +645,6 @@ def save_event(fields: dict, candidate: dict) -> bool:
 
     if looks_like_conference_mill(title):
         print(f"    - skipped (looks like a conference-mill listing): {title}")
-        return False
-
-    if _is_duplicate_title("events", title):
-        print(
-            f"    - skipped (looks like a duplicate already saved, under a different title): {title}"
-        )
         return False
 
     # Prefer the event's own page Gemini reported (essential for events taken
@@ -649,6 +660,18 @@ def save_event(fields: dict, candidate: dict) -> bool:
                 return False
         except ValueError:
             pass
+
+    # The loose title key strips a trailing year, so on its own it would treat
+    # next year's edition ("Africa Energy Indaba 2027") as a duplicate of this
+    # year's ("... 2026") and never save it. When the event has a date, the
+    # date-aware check below (_is_near_duplicate_event, which also ignores
+    # years in titles) covers the same "with/without the year" case safely —
+    # so only fall back to the loose key for undated events.
+    if _parse_date(start_date_raw) is None and _is_duplicate_title("events", title):
+        print(
+            f"    - skipped (looks like a duplicate already saved, under a different title): {title}"
+        )
+        return False
 
     same_as = _is_near_duplicate_event(title, start_date_raw)
     if same_as:
@@ -688,7 +711,7 @@ def save_event(fields: dict, candidate: dict) -> bool:
     # first saved under, and `discarded` is never sent, so a discard sticks.
     # Its existing relevance score is kept too (no re-classification).
     duplicate_id = find_duplicate_event_id(
-        fields.get("organizer"), fields.get("start_date"), fields.get("end_date")
+        fields.get("organizer"), fields.get("start_date"), fields.get("end_date"), title
     )
     if duplicate_id:
         patch_row = {k: v for k, v in row.items() if k != "title"}

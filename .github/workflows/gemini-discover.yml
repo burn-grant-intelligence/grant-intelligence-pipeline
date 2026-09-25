@@ -45,3 +45,15 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python scripts/gemini_discover.py
+
+      # Housekeeping after each run: delete events that ended over a week ago,
+      # discard duplicate copies and conference-mill listings. No Gemini
+      # calls, takes seconds. See scripts/cleanup_events.py.
+      - name: Clean up events
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        working-directory: scripts
+        run: python cleanup_events.py --apply

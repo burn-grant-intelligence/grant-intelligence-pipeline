@@ -28,10 +28,20 @@ export default function DraftApplication() {
   async function loadData() {
     setLoading(true);
     setError(null);
+    // Only opportunities the Eligibility Tracker has marked "Fit" progress
+    // here by default — everything else (unreviewed or "Not fit") stays out
+    // until someone reviews it there, or forces it in with the "Draft
+    // anyway" override (see EligibilityTracker.tsx's updateDraftOverride).
+    // This is a gate on fit_status/draft_override alone: it deliberately
+    // does NOT also flip an item's tracker `status` — that stays a fully
+    // separate, manually-set field in the Application Tracker, per the
+    // 2026-09-25 design decision to keep pipeline-stage and
+    // eligibility-judgment independent.
     const { data, error: fetchError } = await supabase
       .from("tracker_items")
       .select("*, grant:grants(*)")
       .in("status", ["tracking", "researching", "drafting"])
+      .or("fit_status.eq.fit,draft_override.eq.true")
       .order("updated_at", { ascending: false });
     if (fetchError) setError(fetchError.message);
     setItems((data as unknown as TrackerItem[]) ?? []);
@@ -70,7 +80,9 @@ export default function DraftApplication() {
 
       {!loading && !error && items.length === 0 && (
         <div className="rounded-lg border border-dashed border-[var(--border)] bg-[var(--surface)] p-10 text-center text-[var(--ink-muted)]">
-          Nothing to draft yet — track an opportunity from the Grant Scanner first.
+          Nothing to draft yet — track an opportunity from the Grant Scanner, then mark it
+          &ldquo;Fit&rdquo; in the Eligibility Tracker (or use its &ldquo;Draft anyway&rdquo;
+          override to bring in an unreviewed one).
         </div>
       )}
 
@@ -88,12 +100,24 @@ export default function DraftApplication() {
                 <p className="font-medium text-[var(--ink)]">
                   {item.grant?.title ?? "(untitled grant)"}
                 </p>
-                {item.fit_status === "not_fit" && (
+                {/* Every item here is fit_status === "fit" OR draft_override === true (see
+                    loadData's query) — so anything that isn't actually "fit" only got here via
+                    the manual override, and should say so plainly rather than looking like a
+                    normal fit-approved item. */}
+                {item.fit_status !== "fit" && (
                   <span
-                    title="Marked Not Fit in the Eligibility Tracker — check there before drafting"
-                    className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700"
+                    title={
+                      item.fit_status === "not_fit"
+                        ? "Marked Not Fit in the Eligibility Tracker — shown here only via manual override"
+                        : "Not yet reviewed in the Eligibility Tracker — shown here only via manual override"
+                    }
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                      item.fit_status === "not_fit"
+                        ? "bg-red-100 text-red-700"
+                        : "bg-amber-100 text-amber-700"
+                    }`}
                   >
-                    ⚠ Not fit
+                    {item.fit_status === "not_fit" ? "⚠ Not fit (override)" : "⚠ Unreviewed (override)"}
                   </span>
                 )}
               </div>

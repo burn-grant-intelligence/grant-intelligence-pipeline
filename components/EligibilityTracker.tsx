@@ -94,6 +94,26 @@ export default function EligibilityTracker() {
     if (updateError) setError(updateError.message);
   }
 
+  // Manual escape hatch (supabase/draft_override_migration_2026-09-25.sql):
+  // Draft Application's query only shows fit_status === "fit" items by
+  // default (see DraftApplication.tsx's loadData). This lets someone force
+  // a specific unreviewed/not-fit item in there anyway, without touching
+  // fit_status/fit_notes — the eligibility verdict itself stays intact and
+  // visible, only where the item is allowed to show changes.
+  async function updateDraftOverride(trackerItemId: string, draft_override: boolean) {
+    const { error: updateError } = await supabase
+      .from("tracker_items")
+      .update({ draft_override, updated_at: new Date().toISOString() })
+      .eq("id", trackerItemId);
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+    setItems((prev) =>
+      prev.map((i) => (i.id === trackerItemId ? { ...i, draft_override } : i))
+    );
+  }
+
   async function checkEligibility(grantId: string) {
     setCheckingGrantId(grantId);
     setError(null);
@@ -152,9 +172,10 @@ export default function EligibilityTracker() {
         <p className="text-sm text-[var(--ink-muted)]">
           Check who&rsquo;s actually eligible for a tracked opportunity — countries of focus,
           sector, single applicant vs. consortium, and required documents — before anyone spends
-          time drafting a proposal for it. Marking something &ldquo;Not fit&rdquo; here doesn&rsquo;t
-          remove it from Draft Application, it just flags it there so nobody drafts one by
-          accident.
+          time drafting a proposal for it. Only opportunities marked &ldquo;Fit&rdquo; progress to
+          Draft Application; everything else stays out until it&rsquo;s reviewed here. Need to
+          skip that for a specific case anyway? Use &ldquo;Draft anyway&rdquo; below — it forces
+          that one item into Draft Application without changing its Fit status.
         </p>
       </section>
 
@@ -275,7 +296,7 @@ export default function EligibilityTracker() {
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-3">
-                <div className="flex gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {(["unreviewed", "fit", "not_fit"] as FitStatus[]).map((status) => (
                     <FitPill
                       key={status}
@@ -284,6 +305,26 @@ export default function EligibilityTracker() {
                       onClick={() => updateFit(item.id, status)}
                     />
                   ))}
+                  {/* Only relevant when fit alone wouldn't already let this into Draft
+                      Application — once something's marked Fit it gets there anyway. */}
+                  {fitStatus !== "fit" &&
+                    (item.draft_override ? (
+                      <button
+                        onClick={() => updateDraftOverride(item.id, false)}
+                        title="Showing in Draft Application despite not being marked Fit — click to pull it back out"
+                        className="rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-200"
+                      >
+                        In Draft Application (override) ✕
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => updateDraftOverride(item.id, true)}
+                        title="Skip the Fit requirement and let this show in Draft Application anyway"
+                        className="rounded-full border border-dashed border-neutral-300 px-3 py-1 text-xs font-medium text-neutral-500 hover:border-neutral-400 hover:text-neutral-700"
+                      >
+                        Draft anyway →
+                      </button>
+                    ))}
                 </div>
                 <input
                   defaultValue={item.fit_notes ?? ""}

@@ -53,10 +53,22 @@ export default function Home() {
             ))}
           </nav>
 
+          <div className="flex items-center gap-3">
+            <p className="hidden text-xs italic tracking-wide text-[var(--ink-muted)] lg:block">
+              found · vetted · funded
+            </p>
+          </div>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
+      {/* The Management Dashboard tab gets a wider container (2026-09-28,
+          at the team's request) — its 4-column board reads better with
+          more room than the other tabs' single-column layouts need. */}
+      <main
+        className={`mx-auto w-full flex-1 px-6 py-8 ${
+          tab === "dashboard" ? "max-w-[96rem]" : "max-w-6xl"
+        }`}
+      >
         {tab === "scanner" && <GrantScanner />}
         {tab === "tracker" && <ApplicationTracker />}
         {tab === "eligibility" && <EligibilityTracker />}

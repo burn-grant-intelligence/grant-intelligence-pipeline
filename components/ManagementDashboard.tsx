@@ -5,8 +5,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabaseClient";
 import { FitStatus, KeyPriority, TrackerItem, TrackerStatus } from "@/lib/types";
 
-// Quick-access buttons shown under the title — edit these two lines once the
-// real files exist. "#" is a harmless placeholder until then.
+// Quick-access buttons.
 const QUICK_LINKS = {
   weeklyPpt: "https://burn.sharepoint.com/sites/BurnMFG_Main_Site2/3GA_General_and_Admin/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FBurnMFG%5FMain%5FSite2%2F3GA%5FGeneral%5Fand%5FAdmin%2FShared%20Documents%2F31GA%5FCEO%5FOffice%2F31GA%2D06%5FGrants%2F4%2E%20General%2FWeekly%20updates&viewid=3e624444%2D0dee%2D4e13%2Da3a4%2D3d1b4a7ff876&d=w0143488dc9a54b0b96b79d993d48667f&csf=1&ovuser=5b303516%2Df2b1%2D4ff6%2D96ad%2D5945b63736b1%2Cbornventure%2Ekinoti%40burnmfg%2Ecom&TeamsCID=9abe4188%2D532f%2D4563%2Da85d%2De2d8da2c4203&OR=Teams%2DHL&CT=1788960285534&clickparams=eyJBcHBOYW1lIjoiVGVhbXMtV2ViIiwiQXBwVmVyc2lvbiI6IjE0MTUvMjYwODEzMTkzMTciLCJIYXNGZWRlcmF0ZWRVc2VyIjpmYWxzZX0%3D&CID=478839a2%2D90d4%2Dc000%2D4afb%2Db9980a4da99a&cidOR=SPO&FolderCTID=0x012000D3838D15058D3640BED1BFABA1194795",
   grantsPipeline: "https://burn.sharepoint.com/:x:/r/sites/BurnMFG_Main_Site2/3GA_General_and_Admin/_layouts/15/Doc.aspx?sourcedoc=%7BB44F68CD-811D-4A39-9B99-4B93FF8D1E2C%7D&file=2026%20-%20Grants%20&%20awards%20pipeline%20(final).xlsx=&action=default&mobileredirect=true",
@@ -229,25 +228,25 @@ export default function ManagementDashboard() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-2">
-          <a
-            href={QUICK_LINKS.weeklyPpt}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
-          >
-            📊 Weekly PPT
-          </a>
-          <a
-            href={QUICK_LINKS.grantsPipeline}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
-          >
-            📈 Grants Pipeline
-          </a>
-       
+      <div className="flex flex-wrap gap-2">
+        <a
+          href={QUICK_LINKS.weeklyPpt}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
+        >
+          📊 Weekly PPT
+        </a>
+        <a
+          href={QUICK_LINKS.grantsPipeline}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
+        >
+          📈 Grants Pipeline
+        </a>
+      </div>
+
       <div className="flex w-fit gap-1 rounded-lg bg-neutral-100 p-1">
         <SubTabButton active={subTab === "board"} onClick={() => setSubTab("board")}>
           Board view

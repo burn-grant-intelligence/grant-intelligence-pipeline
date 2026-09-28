@@ -74,6 +74,14 @@ export interface Grant {
   supporting_docs?: SupportingDoc[] | null;
   rfp_url?: string | null;
   eligibility_checked_at?: string | null;
+  // Management Dashboard fields (supabase/management_dashboard_migration_2026-09-28.sql)
+  // — filled in from the Eligibility Check / Drafting card's detail slide,
+  // mirroring the fields on the team's own external tracking sheet
+  // (Organization/Amount/etc. above already cover the rest of that sheet).
+  // Optional/nullable: most grants won't have them until someone fills them in.
+  project_start_date?: string | null; // ISO date
+  project_end_date?: string | null; // ISO date
+  type_of_funding?: string | null;
   first_seen_at: string;
   last_seen_at: string;
 }
@@ -132,4 +140,19 @@ export interface TrackerItem {
   created_at: string;
   updated_at: string;
   grant: Grant | null;
+}
+
+// A row in the Management Dashboard's "Key priorities" sub-tab
+// (supabase/management_dashboard_migration_2026-09-28.sql) — a lightweight,
+// team-editable priorities list, deliberately separate from tracker_items
+// since it's a manually curated shortlist/calendar rather than a mirror of
+// every tracked grant.
+export interface KeyPriority {
+  id: string;
+  opportunity: string;
+  deadline: string | null;
+  lead: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
 }

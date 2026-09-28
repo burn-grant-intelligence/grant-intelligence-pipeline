@@ -12,21 +12,30 @@ const QUICK_LINKS = {
   grantsPipeline: "#",
 };
 
-type BoardColumnKey = "tracking" | "eligibility" | "drafting" | "submitted" | "won" | "lost";
+type BoardColumnKey = "tracking" | "eligibility" | "drafting" | "submitted" | "won";
 
 // "Eligibility Check" is tracker_items.status === "researching" shown under
 // the name the team actually uses for that stage (see the Eligibility
 // Tracker tab) — not a separate database value. Everything else lines up
 // 1:1 with a TrackerStatus; "Won" folds in "implementation" too, since an
 // implementation-stage grant was already won.
+//
+// "Lost" is deliberately not a column here (2026-09-28, at the team's
+// request) — this board only tracks the live pipeline, Tracking through
+// Won. A tracker_items row with status "lost" still exists in the
+// database (the Application Tracker tab still shows it) but simply won't
+// appear on this board or in these counts.
 const BOARD_COLUMNS: { key: BoardColumnKey; label: string; statuses: TrackerStatus[] }[] = [
   { key: "tracking", label: "Tracking", statuses: ["tracking"] },
   { key: "eligibility", label: "Eligibility Check", statuses: ["researching"] },
   { key: "drafting", label: "Drafting", statuses: ["drafting"] },
   { key: "submitted", label: "Submitted", statuses: ["submitted"] },
   { key: "won", label: "Won", statuses: ["won", "implementation"] },
-  { key: "lost", label: "Lost", statuses: ["lost"] },
 ];
+
+// The grants team, fixed (2026-09-28) — a dropdown instead of free text so
+// assignment can't drift into near-duplicate spellings of the same name.
+const STAFF = ["Sammy", "Christine", "Hussein", "Bornventure"];
 
 const STATUS_LABELS: Record<TrackerStatus, string> = {
   tracking: "Tracking",
@@ -71,6 +80,7 @@ export default function ManagementDashboard() {
   const [subTab, setSubTab] = useState<SubTab>("board");
   const [ownerFilter, setOwnerFilter] = useState<OwnerFilter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [dragOverKey, setDragOverKey] = useState<BoardColumnKey | null>(null);
 
   useEffect(() => {
     loadBoard();
@@ -97,14 +107,6 @@ export default function ManagementDashboard() {
     if (fetchError) setError(fetchError.message);
     setPriorities((data as KeyPriority[]) ?? []);
   }
-
-  const owners = useMemo(() => {
-    const set = new Set<string>();
-    items.forEach((i) => {
-      if (i.owner) set.add(i.owner);
-    });
-    return Array.from(set).sort();
-  }, [items]);
 
   const filteredItems = useMemo(() => {
     if (ownerFilter === "all") return items;
@@ -140,6 +142,27 @@ export default function ManagementDashboard() {
       return;
     }
     setItems((prev) => prev.map((i) => (i.id === trackerItemId ? { ...i, owner: value } : i)));
+  }
+
+  // Drag-and-drop between columns. A drop onto the column an item is
+  // already in (including a folded status — e.g. dropping an
+  // "implementation" card back onto "Won") is a no-op, so dragging within
+  // the same column can never accidentally downgrade it to the column's
+  // first status.
+  async function moveItemToColumn(trackerItemId: string, column: (typeof BOARD_COLUMNS)[number]) {
+    const item = items.find((i) => i.id === trackerItemId);
+    if (!item) return;
+    if ((column.statuses as string[]).includes(item.status)) return;
+    const newStatus = column.statuses[0];
+    const { error: updateError } = await supabase
+      .from("tracker_items")
+      .update({ status: newStatus, updated_at: new Date().toISOString() })
+      .eq("id", trackerItemId);
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+    setItems((prev) => prev.map((i) => (i.id === trackerItemId ? { ...i, status: newStatus } : i)));
   }
 
   async function updateGrantField(grantId: string, field: GrantFieldName, value: string) {
@@ -206,41 +229,37 @@ export default function ManagementDashboard() {
 
   return (
     <div className="flex flex-col gap-6">
-      <datalist id="dashboard-owner-suggestions">
-        {owners.map((o) => (
-          <option key={o} value={o} />
-        ))}
-      </datalist>
-
-      <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <h2 className="font-serif text-lg font-semibold text-[var(--ink)]">Management Dashboard</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-2">
+          <a
+            href={QUICK_LINKS.weeklyPpt}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
+          >
+            📊 Weekly PPT
+          </a>
+          <a
+            href={QUICK_LINKS.grantsPipeline}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
+          >
+            📈 Grants Pipeline
+          </a>
         </div>
-        <p className="mt-2 text-sm text-[var(--ink-muted)]">
-          Every tracked opportunity, wherever it sits — Tracking, Eligibility Check, Drafting,
-          Submitted, Won or Lost — with who on the team is driving it. &ldquo;Eligibility
-          Check&rdquo; mirrors the Application Tracker&rsquo;s &ldquo;Researching&rdquo; status;
-          the rest line up 1:1 with its stages.
-        </p>
-      </section>
-
-      <div className="flex flex-wrap gap-2">
-        <a
-          href={QUICK_LINKS.weeklyPpt}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
+        {/* Reserved slot for a second/partner logo (2026-09-28, moved here
+            from the app header at the team's request) — drop the image
+            file into public/ (e.g. public/partner-logo.png) and replace
+            this placeholder box with:
+            <img src="/partner-logo.png" alt="Partner name" className="h-9 w-auto" /> */}
+        <div
+          aria-hidden="true"
+          title="Reserved for a second logo"
+          className="hidden h-9 w-20 items-center justify-center rounded-lg border border-dashed border-[var(--border)] text-[10px] font-medium uppercase tracking-wide text-[var(--ink-muted)]/60 sm:flex"
         >
-          📊 Weekly PPT
-        </a>
-        <a
-          href={QUICK_LINKS.grantsPipeline}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
-        >
-          📈 Grants Pipeline
-        </a>
+          logo
+        </div>
       </div>
 
       <div className="flex w-fit gap-1 rounded-lg bg-neutral-100 p-1">
@@ -258,7 +277,7 @@ export default function ManagementDashboard() {
 
       {subTab === "board" && (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             {columns.map((col) => (
               <div key={col.key} className="rounded-lg border border-neutral-200 bg-white p-3 text-center">
                 <p
@@ -290,7 +309,7 @@ export default function ManagementDashboard() {
             <FilterPill active={ownerFilter === "unassigned"} onClick={() => setOwnerFilter("unassigned")}>
               Unassigned
             </FilterPill>
-            {owners.map((owner) => (
+            {STAFF.map((owner) => (
               <FilterPill key={owner} active={ownerFilter === owner} onClick={() => setOwnerFilter(owner)}>
                 <OwnerBadge name={owner} />
                 {owner}
@@ -305,9 +324,25 @@ export default function ManagementDashboard() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
             {columns.map((col) => (
-              <div key={col.key} className="flex flex-col gap-2 rounded-xl bg-neutral-50 p-2">
+              <div
+                key={col.key}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOverKey(col.key);
+                }}
+                onDragLeave={() => setDragOverKey((k) => (k === col.key ? null : k))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverKey(null);
+                  const id = e.dataTransfer.getData("text/plain");
+                  if (id) moveItemToColumn(id, col);
+                }}
+                className={`flex flex-col gap-2 rounded-xl p-2 transition-colors ${
+                  dragOverKey === col.key ? "bg-[var(--accent-soft)] ring-2 ring-[var(--accent)]" : "bg-neutral-50"
+                }`}
+              >
                 <div className="flex items-center justify-between px-1">
                   <span className="text-xs font-semibold text-neutral-700">{col.label}</span>
                   <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-neutral-500">
@@ -422,7 +457,11 @@ function BoardCard({
   const grant = item.grant;
   const fitStatus = item.fit_status ?? "unreviewed";
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 bg-white p-3 shadow-sm">
+    <div
+      draggable
+      onDragStart={(e) => e.dataTransfer.setData("text/plain", item.id)}
+      className="flex cursor-grab flex-col gap-2 rounded-lg border border-neutral-200 bg-white p-3 shadow-sm active:cursor-grabbing"
+    >
       <button onClick={onOpen} className="text-left">
         <p className="line-clamp-2 text-sm font-medium text-neutral-800 hover:text-[var(--accent)]">
           {grant?.title ?? "(untitled grant)"}
@@ -438,13 +477,18 @@ function BoardCard({
         </span>
       </div>
       <FitBadge status={fitStatus} />
-      <input
-        list="dashboard-owner-suggestions"
-        defaultValue={item.owner ?? ""}
-        onBlur={(e) => onOwnerChange(e.target.value)}
-        placeholder="Assign staff…"
+      <select
+        value={item.owner ?? ""}
+        onChange={(e) => onOwnerChange(e.target.value)}
         className="rounded-md border border-neutral-200 px-2 py-1 text-xs text-neutral-700"
-      />
+      >
+        <option value="">Assign staff…</option>
+        {STAFF.map((name) => (
+          <option key={name} value={name}>
+            {name}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -548,13 +592,18 @@ function DetailModal({
               <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
                 BURN lead
               </p>
-              <input
-                list="dashboard-owner-suggestions"
-                defaultValue={item.owner ?? ""}
-                onBlur={(e) => onOwnerChange(e.target.value)}
-                placeholder="Unassigned"
+              <select
+                value={item.owner ?? ""}
+                onChange={(e) => onOwnerChange(e.target.value)}
                 className="w-full rounded-md border border-neutral-200 px-2 py-1 text-sm text-neutral-800"
-              />
+              >
+                <option value="">Unassigned</option>
+                {STAFF.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
           <div className="flex flex-col">

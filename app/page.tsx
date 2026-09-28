@@ -57,17 +57,6 @@ export default function Home() {
             <p className="hidden text-xs italic tracking-wide text-[var(--ink-muted)] lg:block">
               found · vetted · funded
             </p>
-            {/* Reserved slot for a second/partner logo (2026-09-28) — drop
-                the image file into public/ (e.g. public/partner-logo.png)
-                and replace this placeholder box with:
-                <img src="/partner-logo.png" alt="Partner name" className="h-9 w-auto" /> */}
-            <div
-              aria-hidden="true"
-              title="Reserved for a second logo"
-              className="hidden h-9 w-20 items-center justify-center rounded-lg border border-dashed border-[var(--border)] text-[10px] font-medium uppercase tracking-wide text-[var(--ink-muted)]/60 sm:flex"
-            >
-              logo
-            </div>
           </div>
         </div>
       </header>
@@ -136,4 +125,3 @@ function TabButton({
     </button>
   );
 }
- 

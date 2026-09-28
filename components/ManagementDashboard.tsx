@@ -247,21 +247,7 @@ export default function ManagementDashboard() {
           >
             📈 Grants Pipeline
           </a>
-        </div>
-        {/* Reserved slot for a second/partner logo (2026-09-28, moved here
-            from the app header at the team's request) — drop the image
-            file into public/ (e.g. public/partner-logo.png) and replace
-            this placeholder box with:
-            <img src="/partner-logo.png" alt="Partner name" className="h-9 w-auto" /> */}
-        <div
-          aria-hidden="true"
-          title="Reserved for a second logo"
-          className="hidden h-9 w-20 items-center justify-center rounded-lg border border-dashed border-[var(--border)] text-[10px] font-medium uppercase tracking-wide text-[var(--ink-muted)]/60 sm:flex"
-        >
-          logo
-        </div>
-      </div>
-
+       
       <div className="flex w-fit gap-1 rounded-lg bg-neutral-100 p-1">
         <SubTabButton active={subTab === "board"} onClick={() => setSubTab("board")}>
           Board view

@@ -12,22 +12,22 @@ const QUICK_LINKS = {
   grantsPipeline: "https://burn.sharepoint.com/:x:/r/sites/BurnMFG_Main_Site2/3GA_General_and_Admin/_layouts/15/Doc.aspx?sourcedoc=%7BB44F68CD-811D-4A39-9B99-4B93FF8D1E2C%7D&file=2026%20-%20Grants%20&%20awards%20pipeline%20(final).xlsx=&action=default&mobileredirect=true",
 };
 
-type BoardColumnKey = "tracking" | "eligibility" | "drafting" | "submitted" | "won";
+type BoardColumnKey = "tracking" | "drafting" | "submitted" | "won";
 
-// "Eligibility Check" is tracker_items.status === "researching" shown under
-// the name the team actually uses for that stage (see the Eligibility
-// Tracker tab) — not a separate database value. Everything else lines up
-// 1:1 with a TrackerStatus; "Won" folds in "implementation" too, since an
-// implementation-stage grant was already won.
+// "Won" folds in "implementation" too, since an implementation-stage grant
+// was already won.
 //
-// "Lost" is deliberately not a column here (2026-09-28, at the team's
-// request) — this board only tracks the live pipeline, Tracking through
-// Won. A tracker_items row with status "lost" still exists in the
-// database (the Application Tracker tab still shows it) but simply won't
-// appear on this board or in these counts.
+// Two stages are deliberately NOT columns here: "Lost" (removed
+// 2026-09-28, at the team's request — this board only tracks the live
+// pipeline) and "Eligibility Check" / `researching` (removed 2026-09-28,
+// also at the team's request — a high-level board for leadership doesn't
+// need that internal triage stage broken out; it's still the Eligibility
+// Tracker tab's own job). A tracker_items row with status "lost" or
+// "researching" still exists in the database and still shows on the
+// Application Tracker / Eligibility Tracker tabs — it simply won't appear
+// on this board or in these counts.
 const BOARD_COLUMNS: { key: BoardColumnKey; label: string; statuses: TrackerStatus[] }[] = [
   { key: "tracking", label: "Tracking", statuses: ["tracking"] },
-  { key: "eligibility", label: "Eligibility Check", statuses: ["researching"] },
   { key: "drafting", label: "Drafting", statuses: ["drafting"] },
   { key: "submitted", label: "Submitted", statuses: ["submitted"] },
   { key: "won", label: "Won", statuses: ["won", "implementation"] },
@@ -277,7 +277,7 @@ export default function ManagementDashboard() {
 
       {subTab === "board" && (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             {columns.map((col) => (
               <div key={col.key} className="rounded-lg border border-neutral-200 bg-white p-3 text-center">
                 <p
@@ -324,7 +324,7 @@ export default function ManagementDashboard() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {columns.map((col) => (
               <div
                 key={col.key}

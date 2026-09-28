@@ -1,159 +1,139 @@
-export const FOCUS_AREAS = [
-  "Clean energy",
-  "Clean cooking",
-  "Climate change",
-  "GHG reduction",
-  "Energy transition",
-  "Deforestation",
-  "Manufacturing",
-  "Women / gender",
-  "Tech & innovation",
-  "Engineering",
-  "AI / data",
-] as const;
+"use client";
 
-export const TRACKER_STATUSES = [
-  "tracking",
-  "researching",
-  "drafting",
-  "submitted",
-  "won",
-  "implementation",
-  "lost",
-] as const;
+import { useState } from "react";
+import GrantScanner from "@/components/GrantScanner";
+import ApplicationTracker from "@/components/ApplicationTracker";
+import EligibilityTracker from "@/components/EligibilityTracker";
+import DraftApplication from "@/components/DraftApplication";
+import EventsScanner from "@/components/EventsScanner";
+import ManagementDashboard from "@/components/ManagementDashboard";
 
-export type TrackerStatus = (typeof TRACKER_STATUSES)[number];
+type Tab = "scanner" | "tracker" | "eligibility" | "draft" | "events" | "dashboard";
 
-export const APPLICANT_TYPES = ["single", "consortium", "either", "unclear"] as const;
-export type ApplicantType = (typeof APPLICANT_TYPES)[number];
+const TABS: { id: Tab; label: string; icon: string }[] = [
+  { id: "scanner", label: "Grant Scanner", icon: "🔍" },
+  { id: "tracker", label: "Application Tracker", icon: "📋" },
+  // Sits between Tracker and Draft Application by design — it's the
+  // pre-draft triage step (2026-09-23): see who's actually eligible before
+  // anyone spends time drafting a proposal.
+  { id: "eligibility", label: "Eligibility Tracker", icon: "✅" },
+  { id: "draft", label: "Draft Application", icon: "✍️" },
+  { id: "events", label: "Events", icon: "📅" },
+  // Last tab by design (2026-09-28) — a cross-cutting view over every stage
+  // above, plus who on the team owns each opportunity. See
+  // components/ManagementDashboard.tsx.
+  { id: "dashboard", label: "Management Dashboard", icon: "📊" },
+];
 
-export const FIT_STATUSES = ["unreviewed", "fit", "not_fit"] as const;
-export type FitStatus = (typeof FIT_STATUSES)[number];
+export default function Home() {
+  const [tab, setTab] = useState<Tab>("scanner");
 
-// One named application material found on a donor's page (e.g. "Application
-// Form", "Budget Template", "Terms of Reference") — url is null when the
-// page names the document but doesn't link it directly.
-export interface SupportingDoc {
-  name: string;
-  url: string | null;
+  return (
+    <div className="flex flex-col flex-1">
+      <header className="border-b border-white/40">
+        <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-3">
+          <button
+            onClick={() => setTab("scanner")}
+            className="-ml-2 flex items-center gap-3 rounded-xl bg-white/90 px-3 py-1.5 shadow-sm transition-colors hover:bg-white"
+            title="Back to dashboard"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/burn-logo.png" alt="BURN Manufacturing" className="h-9 w-auto" />
+            <span className="h-7 w-px bg-[var(--border)]" />
+            <span className="font-serif text-lg font-semibold leading-tight text-[var(--ink)]">
+              Grant Intelligence
+            </span>
+          </button>
+
+          <nav className="flex gap-2">
+            {TABS.map((t) => (
+              <TabButton key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>
+                {t.icon} {t.label}
+              </TabButton>
+            ))}
+          </nav>
+
+          <div className="flex items-center gap-3">
+            <p className="hidden text-xs italic tracking-wide text-[var(--ink-muted)] lg:block">
+              found · vetted · funded
+            </p>
+            {/* Reserved slot for a second/partner logo (2026-09-28) — drop
+                the image file into public/ (e.g. public/partner-logo.png)
+                and replace this placeholder box with:
+                <img src="/partner-logo.png" alt="Partner name" className="h-9 w-auto" /> */}
+            <div
+              aria-hidden="true"
+              title="Reserved for a second logo"
+              className="hidden h-9 w-20 items-center justify-center rounded-lg border border-dashed border-[var(--border)] text-[10px] font-medium uppercase tracking-wide text-[var(--ink-muted)]/60 sm:flex"
+            >
+              logo
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
+        {tab === "scanner" && <GrantScanner />}
+        {tab === "tracker" && <ApplicationTracker />}
+        {tab === "eligibility" && <EligibilityTracker />}
+        {tab === "draft" && <DraftApplication />}
+        {tab === "events" && <EventsScanner />}
+        {tab === "dashboard" && <ManagementDashboard />}
+      </main>
+    </div>
+  );
 }
 
-export interface Grant {
-  id: string;
-  source_id: string | null;
-  title: string;
-  funder: string | null;
-  amount: number | null;
-  currency: string | null;
-  deadline: string | null; // ISO date
-  geography: string | null;
-  focus_areas: string[];
-  eligibility: string | null;
-  description: string | null;
-  fit_analysis: string | null;
-  application_url: string | null;
-  relevance_score: number | null;
-  // Free-text "where this came from" note (e.g. "referred by Jane at XYZ
-  // Foundation", "found via donor's LinkedIn"). Only ever set on manually
-  // added grants, via the Application Tracker's "+ Add grant" form — distinct
-  // from source_id/source_type, which track the scraper pipeline's own
-  // source records. Optional because it's a newer column
-  // (supabase/tracker_migration_2026-09-18.sql) that may not exist on every
-  // row, and older Grant rows never had it set.
-  source_note?: string | null;
-  // Eligibility Tracker fields (supabase/eligibility_migration_2026-09-23.sql)
-  // — populated by the "Check eligibility" button in components/
-  // EligibilityTracker.tsx (app/api/check-eligibility/route.ts), which asks
-  // Gemini to read the donor's own page (same url_context + google_search
-  // pattern scripts/gemini_discover.py uses) and extract who's actually
-  // eligible to apply, distinct from the grant's own thematic `geography`/
-  // `focus_areas` tags above. All optional/nullable because they're only
-  // populated once someone runs the check — most grants won't have them.
-  eligible_countries?: string[] | null;
-  applicant_type?: ApplicantType | null;
-  supporting_docs?: SupportingDoc[] | null;
-  rfp_url?: string | null;
-  eligibility_checked_at?: string | null;
-  // Management Dashboard fields (supabase/management_dashboard_migration_2026-09-28.sql)
-  // — filled in from the Eligibility Check / Drafting card's detail slide,
-  // mirroring the fields on the team's own external tracking sheet
-  // (Organization/Amount/etc. above already cover the rest of that sheet).
-  // Optional/nullable: most grants won't have them until someone fills them in.
-  project_start_date?: string | null; // ISO date
-  project_end_date?: string | null; // ISO date
-  type_of_funding?: string | null;
-  first_seen_at: string;
-  last_seen_at: string;
-}
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  const [ripples, setRipples] = useState<{ id: number; x: number; y: number; size: number }[]>([]);
 
-// Industry events (conferences, summits, webinars, forums) discovered by
-// scripts/gemini_discover.py — deliberately a separate type/table from
-// Grant, and shown only in the app's Events tab, not the Grant Scanner.
-// Named EventItem rather than Event to avoid shadowing the DOM's built-in
-// Event type.
-export interface EventItem {
-  id: string;
-  title: string;
-  organizer: string | null;
-  event_type: string | null;
-  format: string | null;
-  start_date: string | null; // ISO date
-  end_date: string | null; // ISO date
-  location: string | null;
-  geography: string | null;
-  focus_areas: string[];
-  description: string | null;
-  fit_analysis: string | null;
-  url: string | null;
-  source_type: string | null;
-  // Written by scripts/reclassify_events.py against config/taxonomy.yaml;
-  // null until an event has been scored.
-  relevance_level: RelevanceLevel | null;
-  relevance_rationale: string | null;
-  first_seen_at: string;
-  last_seen_at: string;
-}
+  function handleClick(e: React.MouseEvent<HTMLButtonElement>) {
+    const button = e.currentTarget;
+    const rect = button.getBoundingClientRect();
+    const size = Math.max(rect.width, rect.height) * 1.6;
+    const id = Date.now();
+    setRipples((prev) => [
+      ...prev,
+      { id, x: e.clientX - rect.left - size / 2, y: e.clientY - rect.top - size / 2, size },
+    ]);
+    window.setTimeout(() => {
+      setRipples((prev) => prev.filter((r) => r.id !== id));
+    }, 550);
+    onClick();
+  }
 
-export type RelevanceLevel = "high" | "medium" | "low" | "not_relevant";
-
-export interface TrackerItem {
-  id: string;
-  grant_id: string;
-  status: TrackerStatus;
-  owner: string | null;
-  notes: string | null;
-  tor_text: string | null;
-  // The team's own Fit/Not Fit call for this tracked pursuit — deliberately
-  // separate from the `Grant.eligible_countries`/`applicant_type` etc. above:
-  // those are facts about the opportunity itself (same for anyone looking at
-  // it), this is BURN's judgment call about pursuing it. Defaults to
-  // "unreviewed" until someone sets it in the Eligibility Tracker tab.
-  fit_status?: FitStatus;
-  fit_notes?: string | null;
-  // Manual "draft anyway" escape hatch (supabase/draft_override_migration_2026-09-25.sql).
-  // Draft Application only shows items with fit_status === "fit" by default
-  // — this lets someone force an unreviewed or not-fit item in there anyway
-  // for a specific case, without changing the actual fit_status/fit_notes
-  // record in the Eligibility Tracker. Defaults to false; optional because
-  // it's a newer column that may not exist on every row yet.
-  draft_override?: boolean;
-  created_at: string;
-  updated_at: string;
-  grant: Grant | null;
-}
-
-// A row in the Management Dashboard's "Key priorities" sub-tab
-// (supabase/management_dashboard_migration_2026-09-28.sql) — a lightweight,
-// team-editable priorities list, deliberately separate from tracker_items
-// since it's a manually curated shortlist/calendar rather than a mirror of
-// every tracked grant.
-export interface KeyPriority {
-  id: string;
-  opportunity: string;
-  deadline: string | null;
-  lead: string | null;
-  sort_order: number;
-  created_at: string;
-  updated_at: string;
+  return (
+    <button
+      onClick={handleClick}
+      className={`relative overflow-hidden rounded-full px-4 py-2 text-sm font-medium shadow-sm transition-colors ${
+        active
+          ? "bg-white text-[var(--accent)]"
+          : "bg-white/75 text-[var(--ink)]/75 hover:bg-white"
+      }`}
+    >
+      {children}
+      {ripples.map((r) => (
+        <span
+          key={r.id}
+          className="pointer-events-none absolute rounded-full bg-[var(--accent)]/25"
+          style={{
+            left: r.x,
+            top: r.y,
+            width: r.size,
+            height: r.size,
+            animation: "tab-ripple 0.55s ease-out",
+          }}
+        />
+      ))}
+    </button>
+  );
 }
  

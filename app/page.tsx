@@ -53,11 +53,6 @@ export default function Home() {
             ))}
           </nav>
 
-          <div className="flex items-center gap-3">
-            <p className="hidden text-xs italic tracking-wide text-[var(--ink-muted)] lg:block">
-              found · vetted · funded
-            </p>
-          </div>
         </div>
       </header>
 

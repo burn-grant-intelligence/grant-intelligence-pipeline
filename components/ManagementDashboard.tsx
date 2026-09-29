@@ -285,7 +285,7 @@ export default function ManagementDashboard() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+            <span className="text-xs font-semibold uppercase tracking-wide text-white">
               Filter by staff
             </span>
             <FilterPill active={ownerFilter === "all"} onClick={() => setOwnerFilter("all")}>
@@ -351,7 +351,7 @@ export default function ManagementDashboard() {
       {subTab === "priorities" && (
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-[var(--ink-muted)]">
+            <p className="text-sm text-white">
               Editable — click any cell to update it directly.
             </p>
             <button

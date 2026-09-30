@@ -2,7 +2,7 @@
 // Run: npx tsx test/profileStore.test.ts
 // All values below are made up — this file is in a public repo.
 import { BURN_PROFILE } from "../lib/eligibility/burnProfile";
-import { loadProfile, markDefaultProfile, mergeProfile } from "../lib/eligibility/profileStore";
+import { loadProfile, mergeProfile } from "../lib/eligibility/profileStore";
 import { normalizeFacts } from "../lib/eligibility/extract";
 import { buildReport } from "../lib/eligibility/rules";
 
@@ -79,8 +79,8 @@ async function main() {
   l = await loadProfile({ from: () => { throw new Error("network down"); } } as any);
   check(l.source === "default" && l.reason === "network down", "a thrown error never breaks the check");
 
-  // ── markDefaultProfile ──
-  console.log("\n──────── markDefaultProfile ────────");
+  // ── the private profile is optional ──
+  console.log("\n──────── no private profile ────────");
   const facts = normalizeFacts({
     source_coverage: "full_rfp", extraction_confidence: 0.9,
     deadline: { date: "2026-12-15", status: "open" },
@@ -88,14 +88,11 @@ async function main() {
     sector: { covers_clean_cooking: "yes", eligible_technologies: ["electric"] },
     applicant: { eligible_org_types: ["for_profit_company"], structure: "single" },
   });
-  const fit = buildReport(facts, { sources: [], model: "t" }, undefined, NOW);
-  check(fit.verdict === "fit", "sanity: a clean call is 'fit' on the defaults alone");
-  const marked = markDefaultProfile(fit, "table missing");
-  check(marked.verdict === "needs_review", "fit on defaults is downgraded to needs_review");
-  check(marked.open_questions[0].id === "P0" && marked.notes_text.includes("private profile could not be loaded"), "the reason is shown in the report and notes");
-  const nf = buildReport({ ...facts, applicant: { ...facts.applicant, eligible_org_types: ["ngo_nonprofit"] } }, { sources: [], model: "t" }, undefined, NOW);
-  check(markDefaultProfile(nf).verdict === "not_fit", "a hard not_fit stays not_fit");
-  check(fit.verdict === "fit", "the original report is not mutated");
+  const onDefaults = buildReport(facts, { sources: [], model: "t" }, BURN_PROFILE, NOW);
+  check(onDefaults.verdict === "fit", "a clean call is 'fit' on the public defaults alone — nothing is downgraded for a missing profile");
+  check(!onDefaults.notes_text.toLowerCase().includes("private profile"), "no 'profile not loaded' wording anywhere");
+  const localReg = buildReport(normalizeFacts({ ...facts, applicant: { ...facts.applicant, local_registration_required: "yes" } }), { sources: [], model: "t" }, BURN_PROFILE, NOW);
+  check(localReg.verdict === "fit" && !localReg.warnings.some((w) => w.id === "S6"), "a local-registration requirement in Kenya passes on the defaults (local company exists)");
 
   console.log(failed ? `\n${failed} FAILED` : "\nAll scenarios passed");
   process.exit(failed ? 1 : 0);

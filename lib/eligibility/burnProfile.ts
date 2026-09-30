@@ -10,13 +10,15 @@
 // lib/eligibility/profileStore.ts merges that row over these defaults, so
 // editing the private profile needs no code change and no GitHub commit.
 //
-// If the private row is missing the check still runs on these defaults, but the
-// route marks the result "needs review" — with no commitments/revenue loaded
-// some rules cannot judge, and must not silently pass.
+// The private row is optional. Without it the check runs on these defaults;
+// the only things it adds are the double-subsidy check against programmes BURN
+// already holds, revenue-based caps, and the wording quoted in some messages.
 //
 // Anything left null: revenue -> turnover rules ask for review; match % and
 // pre-financing capacity -> no flag (BURN co-finances and is open to
 // pre-financing); once filled in (private profile) the rules compare against it.
+// The private profile is OPTIONAL: a check works fully on these defaults and
+// is never held back or downgraded because the private table is missing.
 
 import type { Technology } from "./types";
 
@@ -65,23 +67,23 @@ export const BURN_PROFILE = {
     carbon: "",
   },
 
-  // Operating countries and how BURN is present there. The private profile
-  // adds local entity names and marks where a local company exists.
+  // Operating countries and how BURN is present there. BURN has a local
+  // company in each of these; the private profile can add the entity names.
   countries: [
-    { name: "Kenya", presence: "manufacturing", sinceYear: 2011 },
-    { name: "Nigeria", presence: "manufacturing" },
-    { name: "Ghana", presence: "assembly" },
-    { name: "Tanzania", presence: "assembly" },
-    { name: "Malawi", presence: "assembly" },
-    { name: "Mozambique", presence: "local_entity", sinceYear: 2021 },
-    { name: "Uganda", presence: "local_entity", sinceYear: 2017 },
-    { name: "DRC", presence: "market" },
-    { name: "Madagascar", presence: "market" },
-    { name: "Ethiopia", presence: "market" },
-    { name: "Senegal", presence: "market" },
-    { name: "Cote d'Ivoire", presence: "market" },
-    { name: "Somalia", presence: "market" },
-    { name: "Zambia", presence: "market" },
+    { name: "Kenya", presence: "manufacturing", localEntity: true, sinceYear: 2011 },
+    { name: "Nigeria", presence: "manufacturing", localEntity: true },
+    { name: "Ghana", presence: "assembly", localEntity: true },
+    { name: "Tanzania", presence: "assembly", localEntity: true },
+    { name: "Malawi", presence: "assembly", localEntity: true },
+    { name: "Mozambique", presence: "local_entity", localEntity: true, sinceYear: 2021 },
+    { name: "Uganda", presence: "local_entity", localEntity: true, sinceYear: 2017 },
+    { name: "DRC", presence: "market", localEntity: true },
+    { name: "Madagascar", presence: "market", localEntity: true },
+    { name: "Ethiopia", presence: "market", localEntity: true },
+    { name: "Senegal", presence: "market", localEntity: true },
+    { name: "Cote d'Ivoire", presence: "market", localEntity: true },
+    { name: "Somalia", presence: "market", localEntity: true },
+    { name: "Zambia", presence: "market", localEntity: true },
   ] as CountryPresence[],
 
   // Countries BURN is actively considering. A call covering ONLY these -> warn, not fail.

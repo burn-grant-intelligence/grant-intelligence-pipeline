@@ -22,7 +22,7 @@ const APPLICANT_TYPE_LABELS: Record<ApplicantType, string> = {
 // Quick-access button, same idea as QUICK_LINKS in ManagementDashboard.tsx.
 // Paste the SharePoint grants-folder link between the quotes on the next line;
 // the "Grants Folder" button only shows once a link is set.
-const GRANTS_FOLDER_URL = "";
+const GRANTS_FOLDER_URL = "https://burn.sharepoint.com/sites/BurnMFG_Main_Site2/3GA_General_and_Admin/Shared%20Documents/Forms/AllItems.aspx?d=w0143488dc9a54b0b96b79d993d48667f&csf=1&web=1&e=kmJNOx&ovuser=5b303516%2Df2b1%2D4ff6%2D96ad%2D5945b63736b1%2Cbornventure%2Ekinoti%40burnmfg%2Ecom&TeamsCID=936d8908%2Da474%2D4641%2D93c2%2D1f2a2910bdbd&OR=Teams%2DHL&CT=1790777568310&clickparams=eyJBcHBOYW1lIjoiVGVhbXMtV2ViIiwiQXBwVmVyc2lvbiI6IjE0MTUvMjYwOTAzMTU4MjAiLCJIYXNGZWRlcmF0ZWRVc2VyIjpmYWxzZX0%3D&CID=604d40a2%2D20a8%2Dc000%2D24e3%2D84b8bf90e399&cidOR=SPO&FolderCTID=0x012000D3838D15058D3640BED1BFABA1194795&id=%2Fsites%2FBurnMFG%5FMain%5FSite2%2F3GA%5FGeneral%5Fand%5FAdmin%2FShared%20Documents%2F31GA%5FCEO%5FOffice%2F31GA%2D06%5FGrants";
 
 // What the eligibility engine concluded about the opportunity (rules against
 // BURN's profile). "Needs review" is a verdict, not a Fit status: it leaves

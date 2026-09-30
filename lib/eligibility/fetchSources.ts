@@ -239,11 +239,11 @@ async function fetchOne(
 export async function gatherSources(
   startUrl: string | null,
   trackerContext: string,
-  opts: { allowPrivateHosts?: boolean } = {}
+  opts: { allowPrivateHosts?: boolean; budgetMs?: number } = {}
 ): Promise<GatheredSources> {
   const allowPrivate = opts.allowPrivateHosts === true; // tests only
   const g: GatheredSources = { parts: [], used: [], notes: [], rfpUrl: null, textChars: 0, pdfCount: 0, coverageHint: "" };
-  const budget = AbortSignal.timeout(TOTAL_BUDGET_MS);
+  const budget = AbortSignal.timeout(Math.min(TOTAL_BUDGET_MS, Math.max(3_000, opts.budgetMs ?? TOTAL_BUDGET_MS)));
   let inlineBytes = 0;
   const seen = new Set<string>();
 

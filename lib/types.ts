@@ -1,3 +1,5 @@
+import type { EligibilityReport, Verdict } from "./eligibility/types";
+
 export const FOCUS_AREAS = [
   "Clean energy",
   "Clean cooking",
@@ -29,6 +31,12 @@ export type ApplicantType = (typeof APPLICANT_TYPES)[number];
 
 export const FIT_STATUSES = ["unreviewed", "fit", "not_fit"] as const;
 export type FitStatus = (typeof FIT_STATUSES)[number];
+
+// The eligibility engine's verdict has one extra value, "needs_review", that
+// is NOT a FitStatus: it leaves fit_status as "unreviewed" (see
+// app/api/check-eligibility/route.ts).
+export type EligibilityVerdict = Verdict;
+export type FitSource = "auto" | "manual";
 
 // One named application material found on a donor's page (e.g. "Application
 // Form", "Budget Template", "Terms of Reference") — url is null when the
@@ -74,6 +82,12 @@ export interface Grant {
   supporting_docs?: SupportingDoc[] | null;
   rfp_url?: string | null;
   eligibility_checked_at?: string | null;
+  // Eligibility engine (supabase/eligibility_engine_migration_2026-09-29.sql):
+  // the rules engine's verdict against BURN's profile (lib/eligibility/).
+  // The score is stored but not shown in the UI.
+  eligibility_verdict?: EligibilityVerdict | null;
+  eligibility_score?: number | null;
+  eligibility_report?: EligibilityReport | null;
   // Management Dashboard fields (supabase/management_dashboard_migration_2026-09-28.sql)
   // — filled in from the Eligibility Check / Drafting card's detail slide,
   // mirroring the fields on the team's own external tracking sheet
@@ -137,6 +151,10 @@ export interface TrackerItem {
   // record in the Eligibility Tracker. Defaults to false; optional because
   // it's a newer column that may not exist on every row yet.
   draft_override?: boolean;
+  // Who made the fit_status call (supabase/eligibility_engine_migration_2026-09-29.sql):
+  // "auto" = the eligibility check (a re-check may update it), "manual" = a
+  // person (a re-check never overwrites it), null = undecided.
+  fit_source?: FitSource | null;
   created_at: string;
   updated_at: string;
   grant: Grant | null;

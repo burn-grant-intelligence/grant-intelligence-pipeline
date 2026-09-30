@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabaseClient";
-import { ApplicantType, FitStatus, Grant, TrackerItem } from "@/lib/types";
+import { ApplicantType, EligibilityVerdict, FitStatus, Grant, TrackerItem } from "@/lib/types";
+import type { EligibilityReport, RuleResult } from "@/lib/eligibility/types";
 
 const FIT_LABELS: Record<FitStatus, string> = {
   unreviewed: "Unreviewed",
@@ -18,7 +19,22 @@ const APPLICANT_TYPE_LABELS: Record<ApplicantType, string> = {
   unclear: "Unclear",
 };
 
-type FitFilter = FitStatus | "all";
+// What the eligibility engine concluded about the opportunity (rules against
+// BURN's profile). "Needs review" is a verdict, not a Fit status: it leaves
+// the item Unreviewed until someone decides.
+const VERDICT_LABELS: Record<EligibilityVerdict, string> = {
+  fit: "Looks like a fit",
+  not_fit: "Not a fit",
+  needs_review: "Needs review",
+};
+
+const VERDICT_STYLES: Record<EligibilityVerdict, string> = {
+  fit: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  not_fit: "border-red-200 bg-red-50 text-red-800",
+  needs_review: "border-amber-200 bg-amber-50 text-amber-800",
+};
+
+type FitFilter = FitStatus | "all" | "needs_review";
 
 // Everything a row needs to show for "Supporting Docs" — a named list when
 // Gemini could enumerate documents, or a single RFP/call-page link when it
@@ -58,10 +74,11 @@ export default function EligibilityTracker() {
   }
 
   const counts = useMemo(() => {
-    const base = { all: items.length, unreviewed: 0, fit: 0, not_fit: 0 };
+    const base = { all: items.length, unreviewed: 0, fit: 0, not_fit: 0, needs_review: 0 };
     for (const item of items) {
       const status = item.fit_status ?? "unreviewed";
       base[status]++;
+      if (status === "unreviewed" && item.grant?.eligibility_verdict === "needs_review") base.needs_review++;
     }
     return base;
   }, [items]);
@@ -70,20 +87,28 @@ export default function EligibilityTracker() {
     () =>
       fitFilter === "all"
         ? items
+        : fitFilter === "needs_review"
+        ? items.filter(
+            (i) => (i.fit_status ?? "unreviewed") === "unreviewed" && i.grant?.eligibility_verdict === "needs_review"
+          )
         : items.filter((i) => (i.fit_status ?? "unreviewed") === fitFilter),
     [items, fitFilter]
   );
 
+  // A person's Fit / Not fit choice is marked fit_source "manual" so a later
+  // "Re-check eligibility" never overwrites it; picking "Unreviewed" hands the
+  // decision back to the eligibility check (fit_source cleared).
   async function updateFit(trackerItemId: string, fit_status: FitStatus) {
+    const fit_source = fit_status === "unreviewed" ? null : "manual";
     const { error: updateError } = await supabase
       .from("tracker_items")
-      .update({ fit_status, updated_at: new Date().toISOString() })
+      .update({ fit_status, fit_source, updated_at: new Date().toISOString() })
       .eq("id", trackerItemId);
     if (updateError) {
       setError(updateError.message);
       return;
     }
-    setItems((prev) => prev.map((i) => (i.id === trackerItemId ? { ...i, fit_status } : i)));
+    setItems((prev) => prev.map((i) => (i.id === trackerItemId ? { ...i, fit_status, fit_source } : i)));
   }
 
   async function updateFitNotes(trackerItemId: string, fit_notes: string) {
@@ -128,10 +153,19 @@ export default function EligibilityTracker() {
         setError(json.error ?? "Eligibility check failed.");
         return;
       }
+      // The route returns { grant: <columns written onto the grant>, tracker:
+      // <fit_status/fit_source/fit_notes it was allowed to set, per tracker item> }.
+      const trackerById = new Map<string, { fit_status: FitStatus; fit_source: "auto" | null; fit_notes: string | null }>(
+        (json.tracker ?? []).map((t: { id: string }) => [t.id, t])
+      );
       setItems((prev) =>
-        prev.map((item) =>
-          item.grant?.id === grantId ? { ...item, grant: { ...item.grant!, ...json } } : item
-        )
+        prev.map((item) => {
+          const trackerChange = trackerById.get(item.id);
+          if (item.grant?.id === grantId) {
+            return { ...item, ...(trackerChange ?? {}), grant: { ...item.grant!, ...json.grant } };
+          }
+          return trackerChange ? { ...item, ...trackerChange } : item;
+        })
       );
     } catch {
       setError("Could not reach the eligibility check endpoint. Is the app deployed with GEMINI_API_KEY set?");
@@ -149,6 +183,8 @@ export default function EligibilityTracker() {
       "Single / Consortium": APPLICANT_TYPE_LABELS[item.grant?.applicant_type ?? "unclear"],
       "Supporting Docs": docsSummaryForExport(item.grant ?? null),
       Fit: FIT_LABELS[item.fit_status ?? "unreviewed"],
+      "Eligibility check": item.grant?.eligibility_verdict ? VERDICT_LABELS[item.grant.eligibility_verdict] : "",
+      "Check summary": item.grant?.eligibility_report?.summary ?? "",
     }));
     const worksheet = XLSX.utils.json_to_sheet(rows);
     worksheet["!cols"] = [
@@ -159,6 +195,8 @@ export default function EligibilityTracker() {
       { wch: 18 },
       { wch: 40 },
       { wch: 12 },
+      { wch: 18 },
+      { wch: 60 },
     ];
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Eligibility Tracker");
@@ -186,6 +224,9 @@ export default function EligibilityTracker() {
           </FilterPill>
           <FilterPill active={fitFilter === "unreviewed"} onClick={() => setFitFilter("unreviewed")}>
             Unreviewed ({counts.unreviewed})
+          </FilterPill>
+          <FilterPill active={fitFilter === "needs_review"} onClick={() => setFitFilter("needs_review")}>
+            Needs review ({counts.needs_review})
           </FilterPill>
           <FilterPill active={fitFilter === "fit"} onClick={() => setFitFilter("fit")}>
             Fit ({counts.fit})
@@ -295,6 +336,8 @@ export default function EligibilityTracker() {
                 </Field>
               </div>
 
+              {grant?.eligibility_report && <VerdictPanel report={grant.eligibility_report} />}
+
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-3">
                 <div className="flex flex-wrap items-center gap-2">
                   {(["unreviewed", "fit", "not_fit"] as FitStatus[]).map((status) => (
@@ -305,6 +348,14 @@ export default function EligibilityTracker() {
                       onClick={() => updateFit(item.id, status)}
                     />
                   ))}
+                  {item.fit_source === "auto" && (
+                    <span
+                      title="Set by the eligibility check. Pick Fit / Not fit yourself to override it — a re-check won't change your choice."
+                      className="text-xs text-neutral-400"
+                    >
+                      set automatically
+                    </span>
+                  )}
                   {/* Only relevant when fit alone wouldn't already let this into Draft
                       Application — once something's marked Fit it gets there anyway. */}
                   {fitStatus !== "fit" &&
@@ -338,6 +389,74 @@ export default function EligibilityTracker() {
         })}
       </div>
     </div>
+  );
+}
+
+const RULE_STATUS_MARK: Record<string, string> = { pass: "✓", fail: "✕", warn: "!", unclear: "?", na: "–" };
+
+function RuleList({ title, rules, tone }: { title: string; rules: RuleResult[]; tone: string }) {
+  if (rules.length === 0) return null;
+  return (
+    <div>
+      <p className={`text-xs font-semibold uppercase tracking-wide ${tone}`}>{title}</p>
+      <ul className="mt-1 flex flex-col gap-1.5">
+        {rules.map((r) => (
+          <li key={r.id} className="text-xs text-neutral-700">
+            <span className="font-medium">
+              {RULE_STATUS_MARK[r.status] ?? ""} {r.label}:
+            </span>{" "}
+            {r.detail}
+            {r.evidence && <span className="block italic text-neutral-500">&ldquo;{r.evidence}&rdquo;</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// The engine's reasoning for one opportunity: a one-line verdict, expandable
+// into what blocked it, what to verify, watch-outs, and required-document
+// readiness. The 0–100 score is stored on the grant but deliberately not shown.
+function VerdictPanel({ report }: { report: EligibilityReport }) {
+  const docsNeedingAttention = report.docs.filter((d) => d.status === "needs_partner" || d.status === "unknown");
+  return (
+    <details className={`rounded-md border px-3 py-2 ${VERDICT_STYLES[report.verdict]}`}>
+      <summary className="cursor-pointer text-sm font-medium">
+        {VERDICT_LABELS[report.verdict]} — <span className="font-normal">{report.summary}</span>
+      </summary>
+      <div className="mt-3 flex flex-col gap-3 rounded bg-white/70 p-3 text-neutral-700">
+        <RuleList title="Why not" rules={report.blocking} tone="text-red-700" />
+        <RuleList title="To verify" rules={report.open_questions} tone="text-amber-700" />
+        <RuleList title="Watch-outs" rules={report.warnings} tone="text-amber-700" />
+        {report.manual_review.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Read manually</p>
+            <ul className="mt-1 list-disc pl-4 text-xs">
+              {report.manual_review.map((line, idx) => (
+                <li key={idx}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {docsNeedingAttention.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Documents needing attention</p>
+            <ul className="mt-1 list-disc pl-4 text-xs">
+              {docsNeedingAttention.map((d, idx) => (
+                <li key={idx}>
+                  {d.name} — {d.status === "needs_partner" ? "needs a third party's sign-off" : "not in BURN's document inventory, check manually"}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <RuleList title="Passed" rules={report.passed} tone="text-emerald-700" />
+        <p className="text-xs text-neutral-400">
+          Checked {new Date(report.checked_at).toLocaleDateString()} · {report.model} · {report.sources.length} source
+          {report.sources.length === 1 ? "" : "s"} read
+        </p>
+      </div>
+    </details>
   );
 }
 

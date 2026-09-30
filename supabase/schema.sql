@@ -44,6 +44,11 @@ create table if not exists grants (
   supporting_docs jsonb default '[]'::jsonb,
   rfp_url text,
   eligibility_checked_at timestamptz,
+  -- Eligibility engine (2026-09-29, supabase/eligibility_engine_migration_2026-09-29.sql):
+  -- the rules engine's verdict against BURN's profile (lib/eligibility/).
+  eligibility_verdict text check (eligibility_verdict in ('fit', 'not_fit', 'needs_review')),
+  eligibility_score integer,
+  eligibility_report jsonb,
   content_hash text not null unique,
   first_seen_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now()
@@ -68,9 +73,24 @@ create table if not exists tracker_items (
   fit_status text not null default 'unreviewed'
     check (fit_status in ('unreviewed', 'fit', 'not_fit')),
   fit_notes text,
+  -- Who made the Fit/Not fit call (2026-09-29): 'auto' = eligibility check,
+  -- 'manual' = a person (never overwritten by a re-check), NULL = undecided.
+  fit_source text check (fit_source in ('auto', 'manual')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
 create index if not exists tracker_items_status_idx on tracker_items(status);
 create index if not exists tracker_items_fit_status_idx on tracker_items(fit_status);
+
+-- BURN's private eligibility profile (2026-09-29, supabase/burn_profile_migration_2026-09-29.sql).
+-- One row, server-only: RLS on, no policies, no anon/authenticated grants — the
+-- repo is public, so sensitive company facts live here rather than in code.
+create table if not exists burn_profile (
+  id int primary key check (id = 1),
+  profile jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+alter table burn_profile enable row level security;
+revoke all on table burn_profile from anon, authenticated;
+grant all on table burn_profile to service_role;

@@ -40,9 +40,10 @@ import { GoogleGenAI, ApiError, UrlRetrievalStatus, type Part, type Tool } from 
 import { createClient } from "@supabase/supabase-js";
 import type { SupportingDoc } from "@/lib/types";
 import { FACTS_SCHEMA, SYSTEM_PROMPT, buildUserPrompt, normalizeFacts, schemaToTemplate } from "@/lib/eligibility/extract";
-import { gatherSources, maxCoverage, type GatheredSources } from "@/lib/eligibility/fetchSources";
+import { gatherSources, isSafeUrl, maxCoverage, type GatheredSources } from "@/lib/eligibility/fetchSources";
+import { assessLink, findLinkPrompt, isGroundingRedirect, parseFoundLink } from "@/lib/eligibility/linkCheck";
 import { buildReport } from "@/lib/eligibility/rules";
-import { loadProfile, markDefaultProfile, type ProfileDb } from "@/lib/eligibility/profileStore";
+import { loadProfile, type ProfileDb } from "@/lib/eligibility/profileStore";
 import { planTrackerUpdate, type TrackerFitRow } from "@/lib/eligibility/applyVerdict";
 import { applyDeadlineFallback, eligibleCountriesFrom } from "@/lib/eligibility/postprocess";
 import type { CallFacts, EligibilityReport } from "@/lib/eligibility/types";
@@ -207,6 +208,28 @@ async function callGemini(
   return null;
 }
 
+// Asks Gemini (Google Search + url_context) for the official page of a call
+// whose stored link is gated, a post, a listing or otherwise wrong. One attempt,
+// short deadline: this is a nice-to-have and must not eat the route's budget.
+async function findOfficialLink(
+  ai: GoogleGenAI,
+  grant: { title: string | null; funder: string | null; application_url: string },
+  started: number
+): Promise<{ url: string | null; reason: string } | null> {
+  try {
+    const abortSignal = AbortSignal.timeout(Math.min(12_000, Math.max(3_000, 30_000 - (Date.now() - started))));
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: [{ role: "user", parts: [{ text: findLinkPrompt(grant) }] }],
+      config: { tools: [{ urlContext: {} }, { googleSearch: {} }], temperature: 0, abortSignal },
+    });
+    return response.text ? parseFoundLink(response.text) : null;
+  } catch (err) {
+    console.warn("findOfficialLink failed:", (err as Error).message);
+    return null;
+  }
+}
+
 function parseFacts(text: string): CallFacts | null {
   try {
     return normalizeFacts(JSON.parse(extractJsonObject(text)));
@@ -275,9 +298,9 @@ export async function POST(request: Request) {
   // Start from the RFP link a previous check already found (usually the real
   // guidelines/PDF), else the source link. If that reads too little, also try
   // the source link and keep whichever read more.
-  const tryGather = async (url: string) => {
+  const tryGather = async (url: string, budgetMs?: number) => {
     try {
-      return await gatherSources(url, "");
+      return await gatherSources(url, "", { budgetMs });
     } catch (err) {
       console.warn("fetchSources failed for one source:", (err as Error).message);
       return null;
@@ -293,6 +316,35 @@ export async function POST(request: Request) {
   ) {
     const alt = await tryGather(grant.application_url);
     if (readScore(alt) > readScore(gathered)) gathered = alt;
+  }
+
+  // ── Does this link really show the call? ──
+  // A login wall, a LinkedIn post or a listing page would otherwise be read as
+  // if it were the RFP. When the link looks wrong, ask Gemini (with Google
+  // Search) for the official page and read that instead, time permitting.
+  let linkNote: string | null = null;
+  let linkReplaced = false;
+  const assessed = assessLink(gathered, grant);
+  if (assessed.status !== "ok") {
+    linkNote = assessed.note;
+    const tried = new Set([primaryUrl, grant.application_url, grant.rfp_url].filter(Boolean) as string[]);
+    if (Date.now() - started < 22_000) {
+      const found = await findOfficialLink(ai, grant, started);
+      if (found?.url && !tried.has(found.url) && !isGroundingRedirect(found.url) && isSafeUrl(found.url)) {
+        const left = 40_000 - (Date.now() - started);
+        if (left >= 6_000) {
+          const better = await tryGather(found.url, Math.min(15_000, left));
+          const betterAssessment = assessLink(better, grant);
+          if (better && betterAssessment.status === "ok") {
+            gathered = better;
+            linkReplaced = true;
+            linkNote = `The link on file looked wrong (${(assessed.note ?? "").toLowerCase()}), so the official page was found through search and read instead: ${found.url}`;
+          } else if (better && readScore(better) > readScore(gathered)) {
+            gathered = better;
+          }
+        }
+      }
+    }
   }
   const coverageCap = gathered ? maxCoverage(gathered) : "landing_page_only";
 
@@ -339,15 +391,17 @@ export async function POST(request: Request) {
   applyDeadlineFallback(facts, grant.deadline);
 
   // ── Stage 2: rules → verdict ──
-  // BURN's sensitive facts live in the private burn_profile table (the repo is
-  // public); the public-safe defaults in burnProfile.ts are the fallback.
+  // Optional private facts live in the burn_profile table (the repo is public);
+  // the public-safe defaults in burnProfile.ts are what the check runs on otherwise.
   const loaded = await loadProfile(supabaseAdmin as unknown as ProfileDb); // cast: the full client type makes tsc recurse
   if (loaded.ignored.length) console.warn("burn_profile: ignored invalid keys/entries:", loaded.ignored.join(", "));
-  let report = buildReport(facts, { sources, model: GEMINI_MODEL }, loaded.profile);
-  if (loaded.source === "default") {
-    console.warn(`burn_profile not loaded, using public defaults (${loaded.reason}) — run supabase/burn_profile_migration_2026-09-29.sql and load the private profile.`);
-    report = markDefaultProfile(report, loaded.reason);
-  }
+  // The private profile is optional: without it the check runs on the public
+  // defaults and the verdict is not held back (only logged for the admin).
+  if (loaded.source === "default") console.info(`burn_profile not used (${loaded.reason}) — running on the public defaults.`);
+  // Mention the link when it was swapped for a better one, or when the call
+  // still couldn't be read in full (a stale warning would mislead otherwise).
+  const linkForReport = linkNote && (linkReplaced || facts.source_coverage !== "full_rfp") ? linkNote : null;
+  const report = buildReport(facts, { sources, model: GEMINI_MODEL, link: linkForReport }, loaded.profile);
 
   const supportingDocs: SupportingDoc[] = facts.documents_required.map((d) => ({ name: d.name, url: d.url }));
   const grantUpdate = {

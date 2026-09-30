@@ -19,6 +19,11 @@ const APPLICANT_TYPE_LABELS: Record<ApplicantType, string> = {
   unclear: "Unclear",
 };
 
+// Quick-access button, same idea as QUICK_LINKS in ManagementDashboard.tsx.
+// Paste the SharePoint grants-folder link between the quotes on the next line;
+// the "Grants Folder" button only shows once a link is set.
+const GRANTS_FOLDER_URL = "";
+
 // What the eligibility engine concluded about the opportunity (rules against
 // BURN's profile). "Needs review" is a verdict, not a Fit status: it leaves
 // the item Unreviewed until someone decides.
@@ -205,8 +210,18 @@ export default function EligibilityTracker() {
 
   return (
     <div className="flex flex-col gap-6">
-      <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
+      <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
         <h2 className="text-lg font-semibold text-[var(--ink)]">Eligibility Tracker</h2>
+        {GRANTS_FOLDER_URL && (
+          <a
+            href={GRANTS_FOLDER_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
+          >
+            📁 Grants Folder
+          </a>
+        )}
       </section>
 
       <div className="flex flex-wrap items-center justify-between gap-3">

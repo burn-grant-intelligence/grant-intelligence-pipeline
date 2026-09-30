@@ -23,9 +23,9 @@ const APPLICANT_TYPE_LABELS: Record<ApplicantType, string> = {
 // BURN's profile). "Needs review" is a verdict, not a Fit status: it leaves
 // the item Unreviewed until someone decides.
 const VERDICT_LABELS: Record<EligibilityVerdict, string> = {
-  fit: "Looks like a fit",
+  fit: "Fit",
   not_fit: "Not a fit",
-  needs_review: "Needs review",
+  needs_review: "Needs further review",
 };
 
 const VERDICT_STYLES: Record<EligibilityVerdict, string> = {
@@ -206,15 +206,7 @@ export default function EligibilityTracker() {
   return (
     <div className="flex flex-col gap-6">
       <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
-        <h2 className="mb-1 text-lg font-semibold text-[var(--ink)]">Eligibility Tracker</h2>
-        <p className="text-sm text-[var(--ink-muted)]">
-          Check who&rsquo;s actually eligible for a tracked opportunity — countries of focus,
-          sector, single applicant vs. consortium, and required documents — before anyone spends
-          time drafting a proposal for it. Only opportunities marked &ldquo;Fit&rdquo; progress to
-          Draft Application; everything else stays out until it&rsquo;s reviewed here. Need to
-          skip that for a specific case anyway? Use &ldquo;Draft anyway&rdquo; below — it forces
-          that one item into Draft Application without changing its Fit status.
-        </p>
+        <h2 className="text-lg font-semibold text-[var(--ink)]">Eligibility Tracker</h2>
       </section>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -425,6 +417,12 @@ function VerdictPanel({ report }: { report: EligibilityReport }) {
         {VERDICT_LABELS[report.verdict]} — <span className="font-normal">{report.summary}</span>
       </summary>
       <div className="mt-3 flex flex-col gap-3 rounded bg-white/70 p-3 text-neutral-700">
+        {report.link_note && (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">About the link</p>
+            <p className="mt-1 text-xs">{report.link_note}</p>
+          </div>
+        )}
         <RuleList title="Why not" rules={report.blocking} tone="text-red-700" />
         <RuleList title="To verify" rules={report.open_questions} tone="text-amber-700" />
         <RuleList title="Watch-outs" rules={report.warnings} tone="text-amber-700" />

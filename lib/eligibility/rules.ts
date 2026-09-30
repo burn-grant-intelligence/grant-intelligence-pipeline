@@ -88,9 +88,30 @@ const mk = (
 
 const money = (n: number) => (n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : `$${Math.round(n / 1e3)}k`);
 const list = (a: string[]) => a.join(", ");
+
+// Plain names for the machine values, so messages read naturally.
+const TECH_NAMES: Record<string, string> = {
+  improved_biomass: "improved biomass stoves", institutional: "institutional cookstoves", electric: "electric cooking",
+  lpg: "LPG", biogas: "biogas", ethanol: "ethanol", solar_cooking: "solar cooking", all_clean_cooking: "all clean cooking", other: "other technologies",
+};
+const ORG_NAMES: Record<string, string> = {
+  for_profit_company: "for-profit companies", ngo_nonprofit: "NGOs / non-profits", academic_research: "academic and research institutions",
+  government: "government bodies", utility: "utilities", financial_institution: "financial institutions",
+  cooperative_or_association: "cooperatives and associations", individual: "individuals", any: "any organisation",
+};
+const techs = (a: string[]) => list(a.map((t) => TECH_NAMES[t] ?? t));
+const orgs = (a: string[]) => list(a.map((t) => ORG_NAMES[t] ?? t));
 const withNote = (s: string) => (s ? ` (${s})` : "");
 
 // ───────────────────────── the rules ─────────────────────────
+
+// "2026-09-25" -> "25 Sep 2026" (falls back to the raw text if it isn't a date).
+export function fmtDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return iso;
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${Number(m[3])} ${months[Number(m[2]) - 1] ?? m[2]} ${m[1]}`;
+}
 
 export function evaluateRules(f: CallFacts, P: Profile = BURN_PROFILE, now = new Date()): RuleResult[] {
   const rules: RuleResult[] = [];
@@ -104,7 +125,7 @@ export function evaluateRules(f: CallFacts, P: Profile = BURN_PROFILE, now = new
     const days = parsed && !isNaN(+parsed) ? Math.ceil((+parsed - +now) / 86_400_000) : null;
     if (d.is_rolling) rules.push(mk("H1", "Deadline", "hard", "pass", "Rolling / open-ended call.", d.evidence));
     else if (d.status === "closed" || (days !== null && days < 0))
-      rules.push(mk("H1", "Deadline", "hard", "fail", `Call is closed${d.date ? ` (deadline ${d.date})` : ""}.`, d.evidence));
+      rules.push(mk("H1", "Deadline", "hard", "fail", d.date ? `The call closed on ${fmtDate(d.date)}, so the deadline has already passed.` : "The call is marked as closed.", d.evidence));
     else if (days !== null) rules.push(mk("H1", "Deadline", "hard", "pass", `Open — ${days} day(s) left (${d.date}).`, d.evidence));
     else if (d.status === "open") rules.push(mk("H1", "Deadline", "hard", "pass", "Marked open; no deadline date found.", d.evidence));
     else rules.push(mk("H1", "Deadline", "hard", "unclear", "No deadline or open/closed status found in the sources.", d.evidence));
@@ -156,13 +177,13 @@ export function evaluateRules(f: CallFacts, P: Profile = BURN_PROFILE, now = new
     const open = el.size === 0 || el.has("all_clean_cooking");
     const okMain = P.technologies.main.filter((t) => (open || el.has(t)) && !ex.has(t));
     const okLimited = P.technologies.limited.filter((t) => (open || el.has(t)) && !ex.has(t));
-    if (okMain.length) rules.push(mk("H4", "Technology", "hard", "pass", `BURN products eligible: ${list(okMain)}.`, f.sector.evidence));
+    if (okMain.length) rules.push(mk("H4", "Technology", "hard", "pass", `BURN products eligible: ${techs(okMain)}.`, f.sector.evidence));
     else if (okLimited.length && !open)
-      rules.push(mk("H4", "Technology", "soft", "warn", `Only ${list(okLimited)} eligible — BURN's gas appliances are a limited line.`, f.sector.evidence));
+      rules.push(mk("H4", "Technology", "soft", "warn", `Only ${techs(okLimited)} eligible — BURN's gas appliances are a limited line.`, f.sector.evidence));
     else if ([...el].every((t) => t === "other") && el.size > 0)
       rules.push(mk("H4", "Technology", "hard", "unclear", "Eligible technologies are described vaguely — check product list.", f.sector.evidence));
     else
-      rules.push(mk("H4", "Technology", "hard", "fail", `Call funds ${list([...el]) || "none of BURN's technologies"}${ex.size ? ` and excludes ${list([...ex])}` : ""}; BURN offers ${list(P.technologies.main)}.`, f.sector.evidence));
+      rules.push(mk("H4", "Technology", "hard", "fail", `Call funds ${techs([...el]) || "none of BURN's technologies"}${ex.size ? ` and excludes ${techs([...ex])}` : ""}; BURN offers ${techs(P.technologies.main)}.`, f.sector.evidence));
   }
 
   // H5 — applicant organisation type ---------------------------------------
@@ -171,7 +192,7 @@ export function evaluateRules(f: CallFacts, P: Profile = BURN_PROFILE, now = new
     const types = new Set(a.eligible_org_types);
     if (types.size === 0) rules.push(mk("H5", "Applicant type", "hard", "unclear", "Eligible organisation types not stated.", a.evidence));
     else if (types.has("any") || types.has(P.orgType)) rules.push(mk("H5", "Applicant type", "hard", "pass", "For-profit companies are eligible.", a.evidence));
-    else rules.push(mk("H5", "Applicant type", "hard", "fail", `Restricted to ${list([...types])}; BURN is a for-profit company.`, a.evidence));
+    else rules.push(mk("H5", "Applicant type", "hard", "fail", `Open only to ${orgs([...types])}; BURN is a for-profit company.`, a.evidence));
   }
 
   // H6 — ownership / locality ----------------------------------------------
@@ -333,9 +354,19 @@ export function assessDocuments(f: CallFacts): DocReadiness[] {
 
 // ───────────────────────── verdict + report ─────────────────────────
 
+// What each hard rule is called in a sentence ("the blocking issue is the deadline").
+const TOPIC: Record<string, string> = {
+  H1: "deadline", H2: "geography", H3: "sector", H4: "technology", H5: "applicant type",
+  H6: "local-ownership requirement", H7a: "employee cap", H7b: "turnover cap", H7c: "minimum-turnover requirement",
+  H8a: "women/youth-led requirement", H8b: "start-up requirement", H8c: "company-age limit", H8d: "minimum company age", H9: "track-record requirement",
+};
+const topicOf = (r: RuleResult) => TOPIC[r.id] ?? r.label.toLowerCase();
+const lowerFirst = (s: string) => (/^[A-Z][a-z]/.test(s) ? s[0].toLowerCase() + s.slice(1) : s);
+const noStop = (s: string) => s.replace(/[.\s]+$/, "");
+
 export function buildReport(
   f: CallFacts,
-  meta: { sources: string[]; model: string },
+  meta: { sources: string[]; model: string; link?: string | null },
   P: Profile = BURN_PROFILE,
   now = new Date()
 ): EligibilityReport {
@@ -370,20 +401,32 @@ export function buildReport(
 
   const manual_review = f.key_exclusions.filter(Boolean);
 
-  const summary =
-    verdict === "not_fit"
-      ? `${blocking.length} blocking issue${blocking.length > 1 ? "s" : ""}: ${list(blocking.map((r) => r.label))}.`
-      : verdict === "needs_review"
-      ? lowCoverage && !hardUnclear.length
-        ? `No blockers found, but only ${f.source_coverage === "landing_page_only" ? "the landing page" : "part of the call"} could be read — verify against the full RFP.`
-        : `No blockers, but ${hardUnclear.length} key criteri${hardUnclear.length > 1 ? "a are" : "on is"} unclear: ${list(hardUnclear.map((r) => r.label))}.`
-      : warnings.length
-      ? `Meets all hard criteria; ${warnings.length} watch-out${warnings.length > 1 ? "s" : ""} to manage.`
-      : "Meets all hard criteria with no watch-outs.";
+  // The one-line result is written as a plain sentence after the verdict label
+  // ("Not a fit — the blocking issue is the deadline: …").
+  const GATED_HINT = "Some opportunities need an account or login before the full call can be viewed, or the link may lead to a summary page.";
+  let summary: string;
+  if (verdict === "not_fit") {
+    summary =
+      blocking.length === 1
+        ? `the blocking issue is the ${topicOf(blocking[0])}: ${noStop(lowerFirst(blocking[0].detail))}.`
+        : `there are ${blocking.length} blocking issues. ` +
+          blocking.map((r, i) => `(${i + 1}) the ${topicOf(r)}: ${noStop(lowerFirst(r.detail))}`).join("; ") + ".";
+  } else if (verdict === "needs_review") {
+    if (lowCoverage) {
+      summary = `we couldn't read enough of the call to be sure. ${meta.link ? noStop(meta.link) + "." : GATED_HINT} Please open the call link, check the requirements (or the RFP) yourself, and re-check if you find a better link.`;
+    } else {
+      const items = hardUnclear.map((r) => topicOf(r));
+      summary = `no blockers found, but ${items.length > 1 ? "these points" : "this point"} couldn't be confirmed from the call: ${list(items)}. Please check ${items.length > 1 ? "them" : "it"} in the RFP or on the call page.`;
+    }
+  } else if (warnings.length) {
+    summary = `meets the requirements we could check, with ${warnings.length} point${warnings.length > 1 ? "s" : ""} to watch: ${list(warnings.map((r) => r.label.toLowerCase()))}.`;
+  } else {
+    summary = "meets all the requirements we could check, with nothing to watch.";
+  }
 
   const report: EligibilityReport = {
     verdict, score, summary, blocking, warnings, open_questions, passed, manual_review, docs,
-    notes_text: "", facts: f, sources: meta.sources, model: meta.model, checked_at: now.toISOString(),
+    notes_text: "", link_note: meta.link ?? null, facts: f, sources: meta.sources, model: meta.model, checked_at: now.toISOString(),
   };
   report.notes_text = buildNotes(report);
   return report;
@@ -392,7 +435,7 @@ export function buildReport(
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
 export function buildNotes(r: EligibilityReport): string {
-  const head = r.verdict === "fit" ? "FIT" : r.verdict === "not_fit" ? "NOT FIT" : "NEEDS REVIEW";
+  const head = r.verdict === "fit" ? "FIT" : r.verdict === "not_fit" ? "NOT A FIT" : "NEEDS FURTHER REVIEW";
   // The 0–100 score is stored on the grant but deliberately kept out of this text.
   const lines = [`${head} — ${r.summary}`];
   if (r.blocking.length)
@@ -400,5 +443,6 @@ export function buildNotes(r: EligibilityReport): string {
   if (r.open_questions.length) lines.push("VERIFY: " + r.open_questions.map((x) => `${x.label}: ${x.detail}`).join(" | "));
   if (r.warnings.length) lines.push("WATCH-OUTS: " + r.warnings.map((x) => `${x.label}: ${x.detail}`).join(" | "));
   if (r.manual_review.length) lines.push("READ MANUALLY: " + r.manual_review.slice(0, 5).join("; "));
+  if (r.link_note) lines.push("LINK: " + r.link_note);
   return lines.join("\n");
 }

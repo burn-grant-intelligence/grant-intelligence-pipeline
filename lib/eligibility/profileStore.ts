@@ -1,13 +1,12 @@
-// Loads BURN's PRIVATE profile from Supabase and merges it over the public-safe
-// defaults in burnProfile.ts. The repo is public, so sensitive facts (ownership,
+// Loads BURN's OPTIONAL private profile from Supabase and merges it over the
+// public-safe defaults in burnProfile.ts. Nothing depends on it being present. The repo is public, so sensitive facts (ownership,
 // contract values, revenue, live applications, entity names) live in the
 // `burn_profile` table, which only the server (service-role key) can read.
 // Everything here is pure or takes the Supabase client as an argument, so it is
 // covered by test/profileStore.test.ts without a database.
 
 import { BURN_PROFILE, type ActiveCommitment, type CountryPresence } from "./burnProfile";
-import { buildNotes } from "./rules";
-import { TECHNOLOGIES, type EligibilityReport, type RuleResult, type Technology } from "./types";
+import { TECHNOLOGIES, type Technology } from "./types";
 
 export type BurnProfile = typeof BURN_PROFILE;
 
@@ -143,27 +142,4 @@ export async function loadProfile(db: ProfileDb): Promise<LoadedProfile> {
   } catch (e) {
     return fallback((e as Error).message);
   }
-}
-
-// When only the public defaults were available, rules such as the double-subsidy
-// check (no commitments loaded) or turnover/pre-financing would judge against
-// missing data. A "fit" is therefore downgraded to "needs review", and the
-// reason is shown with the result.
-export function markDefaultProfile(report: EligibilityReport, reason?: string): EligibilityReport {
-  const rule: RuleResult = {
-    id: "P0",
-    label: "BURN profile",
-    severity: "hard",
-    status: "unclear",
-    detail: `BURN's private profile could not be loaded${reason ? ` (${reason})` : ""}, so commitments, revenue and ownership details were not checked. Results are incomplete.`,
-    evidence: null,
-  };
-  const next: EligibilityReport = {
-    ...report,
-    open_questions: [rule, ...report.open_questions],
-    verdict: report.verdict === "fit" ? "needs_review" : report.verdict,
-  };
-  if (report.verdict === "fit") next.summary = "Meets the criteria that could be checked, but BURN's private profile was not loaded — verify before relying on this.";
-  next.notes_text = buildNotes(next);
-  return next;
 }

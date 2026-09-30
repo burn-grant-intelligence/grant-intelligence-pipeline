@@ -136,6 +136,7 @@ export interface EligibilityReport {
   manual_review: string[]; // free-text exclusions the rules can't evaluate
   docs: DocReadiness[];
   notes_text: string; // compact text saved to tracker_items.fit_notes
+  link_note?: string | null; // set when the call link was gated, wrong, thin or replaced (see linkCheck.ts)
   facts: CallFacts;
   sources: string[];
   model: string;

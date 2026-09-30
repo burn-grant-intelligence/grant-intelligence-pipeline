@@ -7,8 +7,9 @@ import EligibilityTracker from "@/components/EligibilityTracker";
 import DraftApplication from "@/components/DraftApplication";
 import EventsScanner from "@/components/EventsScanner";
 import ManagementDashboard from "@/components/ManagementDashboard";
+import GrantsFolder from "@/components/GrantsFolder";
 
-type Tab = "scanner" | "tracker" | "eligibility" | "draft" | "events" | "dashboard";
+type Tab = "scanner" | "tracker" | "eligibility" | "draft" | "events" | "folder" | "dashboard";
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "scanner", label: "Grant Scanner", icon: "🔍" },
@@ -19,6 +20,9 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "eligibility", label: "Eligibility Tracker", icon: "✅" },
   { id: "draft", label: "Draft Application", icon: "✍️" },
   { id: "events", label: "Events", icon: "📅" },
+  // Link to the team's SharePoint grants folder (2026-09-30) — the link itself
+  // is set in components/GrantsFolder.tsx.
+  { id: "folder", label: "Grants Folder", icon: "📁" },
   // Last tab by design (2026-09-28) — a cross-cutting view over every stage
   // above, plus who on the team owns each opportunity. See
   // components/ManagementDashboard.tsx.
@@ -72,6 +76,7 @@ export default function Home() {
         {tab === "eligibility" && <EligibilityTracker />}
         {tab === "draft" && <DraftApplication />}
         {tab === "events" && <EventsScanner />}
+        {tab === "folder" && <GrantsFolder />}
         {tab === "dashboard" && <ManagementDashboard />}
       </main>
     </div>

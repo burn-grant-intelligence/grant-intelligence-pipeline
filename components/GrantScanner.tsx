@@ -15,6 +15,28 @@ const MIN_VALUE_OPTIONS = [
 
 const GEOGRAPHY_OPTIONS = ["Any geography", "Africa-focused", "Global", "East Africa", "Kenya"];
 
+// Awards & prizes are saved by `scripts/gemini_discover.py --awards` into the
+// same grants table, tagged with this focus area (and type_of_funding
+// "Cash prize award" when there is a cash prize).
+const AWARD_TAG = "awards & prizes";
+const TYPE_OPTIONS = [
+  { label: "All opportunities", value: "all" },
+  { label: "Grants & calls", value: "grants" },
+  { label: "🏆 Awards & prizes", value: "awards" },
+] as const;
+type TypeFilter = (typeof TYPE_OPTIONS)[number]["value"];
+
+function normalizeTag(s: string) {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function isAward(grant: Grant) {
+  return (
+    grant.type_of_funding === "Cash prize award" ||
+    (grant.focus_areas ?? []).some((tag) => normalizeTag(tag) === normalizeTag(AWARD_TAG))
+  );
+}
+
 export default function GrantScanner() {
   const [grants, setGrants] = useState<Grant[]>([]);
   const [sourceCount, setSourceCount] = useState<number | null>(null);
@@ -24,6 +46,7 @@ export default function GrantScanner() {
   const [activeFocusAreas, setActiveFocusAreas] = useState<string[]>([]);
   const [minValue, setMinValue] = useState(0);
   const [geography, setGeography] = useState(GEOGRAPHY_OPTIONS[0]);
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [trackedIds, setTrackedIds] = useState<Set<string>>(new Set());
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [discardingId, setDiscardingId] = useState<string | null>(null);
@@ -61,11 +84,9 @@ export default function GrantScanner() {
     );
   }
 
-  // Strips casing, spaces, and punctuation so button labels like "AI / data"
-  // match however the scraper happened to store the tag (e.g. "ai/data").
-  function normalizeTag(s: string) {
-    return s.toLowerCase().replace(/[^a-z0-9]/g, "");
-  }
+  // normalizeTag (top of file) strips casing, spaces, and punctuation so
+  // button labels like "AI / data" match however the scraper happened to
+  // store the tag (e.g. "ai/data").
 
   // Reads the `discarded` column without requiring it in the Grant type, so
   // this still compiles (and the page still loads) whether or not the column
@@ -102,6 +123,8 @@ export default function GrantScanner() {
     const visible = grants.filter((g) => {
       if (isDiscarded(g)) return false;
       if (isExpired(g)) return false;
+      if (typeFilter === "awards" && !isAward(g)) return false;
+      if (typeFilter === "grants" && isAward(g)) return false;
       if (activeFocusAreas.length > 0) {
         const overlap = g.focus_areas?.some((a) =>
           activeFocusAreas.some((active) => normalizeTag(a) === normalizeTag(active))
@@ -124,7 +147,7 @@ export default function GrantScanner() {
         priorityOf(b.grant) - priorityOf(a.grant) || a.index - b.index
       )
       .map((entry) => entry.grant);
-  }, [grants, activeFocusAreas, minValue, geography]);
+  }, [grants, activeFocusAreas, minValue, geography, typeFilter]);
 
   async function trackGrant(grant: Grant) {
     const { error: insertError } = await supabase.from("tracker_items").insert({
@@ -215,6 +238,20 @@ export default function GrantScanner() {
       <section className="flex flex-wrap items-end justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
         <div className="flex flex-wrap gap-6">
           <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-[var(--ink-muted)]">
+            Type
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value as TypeFilter)}
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-800"
+            >
+              {TYPE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-[var(--ink-muted)]">
             Min value
             <select
               value={minValue}
@@ -258,7 +295,11 @@ export default function GrantScanner() {
           {sourceCount === null ? "…" : sourceCount} active source{sourceCount === 1 ? "" : "s"}
         </span>
         <span>
-          {loading ? "Loading…" : `${filteredGrants.length} matching opportunit${filteredGrants.length === 1 ? "y" : "ies"}`}
+          {loading
+            ? "Loading…"
+            : typeFilter === "awards"
+              ? `${filteredGrants.length} open award${filteredGrants.length === 1 ? "" : "s"} & prize${filteredGrants.length === 1 ? "" : "s"}`
+              : `${filteredGrants.length} matching opportunit${filteredGrants.length === 1 ? "y" : "ies"}`}
         </span>
       </div>
 
@@ -270,14 +311,16 @@ export default function GrantScanner() {
 
       {!loading && !error && filteredGrants.length === 0 && (
         <div className="rounded-lg border border-dashed border-neutral-300 bg-[var(--surface)] p-10 text-center text-[var(--ink-muted)]">
-          No grants yet. Once the daily scan runs (or you add sources), matching opportunities will
-          show up here.
+          {typeFilter === "awards"
+            ? "No open awards or prizes yet. They appear here after the \"Awards discovery\" run (GitHub → Actions), which searches twice a week."
+            : "No grants yet. Once the daily scan runs (or you add sources), matching opportunities will show up here."}
         </div>
       )}
 
       <div className="flex flex-col gap-4">
         {filteredGrants.map((grant) => {
           const open = expandedId === grant.id;
+          const award = isAward(grant);
           return (
             <article
               key={grant.id}
@@ -294,6 +337,11 @@ export default function GrantScanner() {
                   </h3>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
+                  {award && (
+                    <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                      🏆 Award
+                    </span>
+                  )}
                   {isFromLinkedIn(grant) && (
                     <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
                       LinkedIn
@@ -329,9 +377,9 @@ export default function GrantScanner() {
                 </div>
               </div>
 
-              {grant.focus_areas && grant.focus_areas.length > 0 && (
+              {grant.focus_areas && grant.focus_areas.some((tag) => normalizeTag(tag) !== normalizeTag(AWARD_TAG)) && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {grant.focus_areas.map((tag) => (
+                  {grant.focus_areas.filter((tag) => normalizeTag(tag) !== normalizeTag(AWARD_TAG)).map((tag) => (
                     <span
                       key={tag}
                       className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600"
@@ -345,10 +393,10 @@ export default function GrantScanner() {
               <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--ink-muted)]">
                 {grant.amount && (
                   <span className="font-medium text-[var(--accent-dark)]">
-                    {grant.currency ?? "USD"} {grant.amount.toLocaleString()}
+                    {award ? "Prize " : ""}{grant.currency ?? "USD"} {grant.amount.toLocaleString()}
                   </span>
                 )}
-                {grant.deadline && <span>Closes {grant.deadline}</span>}
+                {grant.deadline && <span>{award ? "Entries close" : "Closes"} {grant.deadline}</span>}
                 {grant.geography && <span>{grant.geography}</span>}
               </div>
 
@@ -381,7 +429,7 @@ export default function GrantScanner() {
                   {grant.eligibility && (
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--ink-muted)]">
-                        Eligibility
+                        {award ? "Prize & how to enter" : "Eligibility"}
                       </p>
                       <p className="mt-1 text-sm text-neutral-600">{grant.eligibility}</p>
                     </div>
@@ -396,7 +444,7 @@ export default function GrantScanner() {
                         onClick={(e) => e.stopPropagation()}
                         className="text-sm font-medium text-[var(--accent)] hover:underline"
                       >
-                        View opportunity →
+                        {award ? "View award →" : "View opportunity →"}
                       </a>
                     ) : (
                       <span />
@@ -409,7 +457,7 @@ export default function GrantScanner() {
                       disabled={trackedIds.has(grant.id)}
                       className="rounded-md border border-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:border-neutral-300 disabled:text-neutral-400"
                     >
-                      {trackedIds.has(grant.id) ? "Tracked ✓" : "+ Track this grant"}
+                      {trackedIds.has(grant.id) ? "Tracked ✓" : award ? "+ Track this award" : "+ Track this grant"}
                     </button>
                   </div>
                 </div>

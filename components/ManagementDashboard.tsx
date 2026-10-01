@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabaseClient";
 import { FitStatus, KeyPriority, TrackerItem, TrackerStatus } from "@/lib/types";
+import OpportunityPipeline from "@/components/OpportunityPipeline";
+import { FUNDING_TYPES, LEADS, canonicalLead } from "@/lib/pipeline";
 
 // Quick-access buttons.
 const QUICK_LINKS = {
@@ -34,7 +36,9 @@ const BOARD_COLUMNS: { key: BoardColumnKey; label: string; statuses: TrackerStat
 
 // The grants team, fixed (2026-09-28) — a dropdown instead of free text so
 // assignment can't drift into near-duplicate spellings of the same name.
-const STAFF = ["Sammy", "Christine", "Hussein", "Bornventure"];
+// Full names since 2026-10-01 (shared with the Opportunity Pipeline, see
+// lib/pipeline.ts); older first-name-only values still match via canonicalLead.
+const STAFF = LEADS;
 
 const STATUS_LABELS: Record<TrackerStatus, string> = {
   tracking: "Tracking",
@@ -46,7 +50,7 @@ const STATUS_LABELS: Record<TrackerStatus, string> = {
   lost: "Lost",
 };
 
-type SubTab = "board" | "priorities";
+type SubTab = "board" | "priorities" | "pipeline";
 type OwnerFilter = "all" | "unassigned" | string;
 type GrantFieldName = "project_start_date" | "project_end_date" | "type_of_funding";
 
@@ -109,8 +113,8 @@ export default function ManagementDashboard() {
 
   const filteredItems = useMemo(() => {
     if (ownerFilter === "all") return items;
-    if (ownerFilter === "unassigned") return items.filter((i) => !i.owner);
-    return items.filter((i) => i.owner === ownerFilter);
+    if (ownerFilter === "unassigned") return items.filter((i) => !canonicalLead(i.owner));
+    return items.filter((i) => canonicalLead(i.owner) === ownerFilter);
   }, [items, ownerFilter]);
 
   const columns = useMemo(
@@ -254,6 +258,9 @@ export default function ManagementDashboard() {
         <SubTabButton active={subTab === "priorities"} onClick={() => setSubTab("priorities")}>
           Key priorities
         </SubTabButton>
+        <SubTabButton active={subTab === "pipeline"} onClick={() => setSubTab("pipeline")}>
+          Opportunity pipeline
+        </SubTabButton>
       </div>
 
       {error && (
@@ -297,7 +304,7 @@ export default function ManagementDashboard() {
             {STAFF.map((owner) => (
               <FilterPill key={owner} active={ownerFilter === owner} onClick={() => setOwnerFilter(owner)}>
                 <OwnerBadge name={owner} />
-                {owner}
+                {owner.split(" ")[0]}
               </FilterPill>
             ))}
           </div>
@@ -418,6 +425,8 @@ export default function ManagementDashboard() {
         </div>
       )}
 
+      {subTab === "pipeline" && <OpportunityPipeline items={items} />}
+
       {selected && (
         <DetailModal
           item={selected}
@@ -463,7 +472,7 @@ function BoardCard({
       </div>
       <FitBadge status={fitStatus} />
       <select
-        value={item.owner ?? ""}
+        value={canonicalLead(item.owner) ?? ""}
         onChange={(e) => onOwnerChange(e.target.value)}
         className="rounded-md border border-neutral-200 px-2 py-1 text-xs text-neutral-700"
       >
@@ -567,18 +576,32 @@ function DetailModal({
               label="Amount"
               value={grant?.amount ? formatMoney(grant.amount, grant.currency) : "TBD"}
             />
-            <ModalEditableField
-              label="Type of funding"
-              value={grant?.type_of_funding ?? ""}
-              placeholder="TBD — e.g. Grant, Carbon finance"
-              onSave={(v) => grant && onSaveGrantField(grant.id, "type_of_funding", v)}
-            />
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
+                Type of funding
+              </p>
+              <select
+                value={grant?.type_of_funding ?? ""}
+                onChange={(e) => grant && onSaveGrantField(grant.id, "type_of_funding", e.target.value)}
+                className="w-full rounded-md border border-neutral-200 px-2 py-1 text-sm text-neutral-800"
+              >
+                <option value="">TBD</option>
+                {FUNDING_TYPES.map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+                {grant?.type_of_funding && !(FUNDING_TYPES as readonly string[]).includes(grant.type_of_funding) && (
+                  <option value={grant.type_of_funding}>{grant.type_of_funding}</option>
+                )}
+              </select>
+            </div>
             <div>
               <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
                 BURN lead
               </p>
               <select
-                value={item.owner ?? ""}
+                value={canonicalLead(item.owner) ?? ""}
                 onChange={(e) => onOwnerChange(e.target.value)}
                 className="w-full rounded-md border border-neutral-200 px-2 py-1 text-sm text-neutral-800"
               >
@@ -596,15 +619,15 @@ function DetailModal({
               Application — {STATUS_LABELS[item.status]}
             </div>
             <div className="flex-1 p-4 text-sm leading-relaxed text-neutral-700">
-              {grant?.description || grant?.eligibility || "No description on file yet."}
+              {item.pipeline_description || grant?.description || grant?.eligibility || "No description on file yet."}
             </div>
             <ModalRow
               label="Countries"
-              value={grant?.eligible_countries?.length ? grant.eligible_countries.join(", ") : grant?.geography ?? "TBD"}
+              value={item.target_countries?.length ? item.target_countries.join(", ") : grant?.eligible_countries?.length ? grant.eligible_countries.join(", ") : grant?.geography ?? "TBD"}
             />
             <ModalRow
               label="Product type"
-              value={grant?.focus_areas?.length ? grant.focus_areas.join(", ") : "TBD"}
+              value={item.product_types?.length ? item.product_types.join("; ") : "TBD"}
             />
             <ModalRow label="Source" value={grant?.source_note ?? "Grant Scanner"} />
             <ModalRow

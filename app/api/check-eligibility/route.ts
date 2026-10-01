@@ -53,7 +53,7 @@ export const runtime = "nodejs";
 // on every Vercel plan; raise it only if your plan allows more (the fallback
 // to the tools path is skipped when there isn't time left for it).
 export const maxDuration = 60;
-const MIN_MS_FOR_FALLBACK = 25_000;
+const MIN_MS_FOR_FALLBACK = 32_000;
 
 // Default matches scripts/gemini_discover.py's GEMINI_MODEL — never
 // live-verified against a real API call in this build sandbox (no API key
@@ -79,7 +79,13 @@ type GrantRow = {
   focus_areas?: string[] | null;
   eligibility?: string | null;
   description?: string | null;
+  type_of_funding?: string | null;
 };
+
+// Awards, prizes and competitions (found by the awards discovery run) are
+// saved in `grants` too, tagged like this — they get an award-aware prompt.
+const isAward = (g: GrantRow) =>
+  g.type_of_funding === "Cash prize award" || (g.focus_areas ?? []).some((t) => t.toLowerCase().replace(/[^a-z]/g, "") === "awardsprizes");
 
 // What we already store about the opportunity, given to the model as
 // UNVERIFIED context (the prompt tells it the sources win).
@@ -106,6 +112,7 @@ function buildPrompt(mode: Mode, grant: GrantRow, gathered: GatheredSources | nu
         ? gathered.coverageHint
         : "Read the page below with your url_context tool, and also open any call document, guidelines, annexes or PDFs it links to — the eligibility criteria are usually in those, not on the landing page.",
     sourceNotes: mode === "sources" && gathered ? gathered.notes : [],
+    kind: isAward(grant) ? "award" : "grant",
   });
   const about = `Opportunity: "${grant.title ?? "(untitled grant)"}"
 Funder: ${grant.funder ?? "an unnamed funder"}
@@ -156,12 +163,19 @@ interface GeminiResult {
   urlsRead: string[] | null;
 }
 
+// Why the last Gemini step failed — shown to the user, so "try again shortly"
+// isn't the only thing they learn.
+interface Diag {
+  reason: string | null;
+}
+
 async function callGemini(
   ai: GoogleGenAI,
   mode: Mode,
   prompt: string,
   sourceParts: Part[],
-  started: number
+  started: number,
+  diag?: Diag
 ): Promise<GeminiResult | null> {
   const tools: Tool[] = [{ urlContext: {} }, { googleSearch: {} }];
   for (let attempt = 0; attempt < GEMINI_MAX_RETRIES; attempt++) {
@@ -184,6 +198,7 @@ async function callGemini(
           `Gemini returned no text (${mode} mode): finishReason=${response.candidates?.[0]?.finishReason ?? "unknown"}` +
             (response.promptFeedback?.blockReason ? `, blockReason=${response.promptFeedback.blockReason}` : "")
         );
+        if (diag) diag.reason = response.promptFeedback?.blockReason ? `Gemini blocked the request (${response.promptFeedback.blockReason}).` : "Gemini returned an empty answer.";
         return null;
       }
       const meta = response.candidates?.[0]?.urlContextMetadata?.urlMetadata;
@@ -202,6 +217,16 @@ async function callGemini(
         continue;
       }
       console.error(`Gemini eligibility request failed (${mode} mode):`, err);
+      if (diag) {
+        const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+        diag.reason = timedOut
+          ? "Gemini took too long to read this page (timed out)."
+          : status === 429
+            ? "Gemini is rate-limited right now (too many requests)."
+            : status
+              ? `Gemini returned an error (HTTP ${status}).`
+              : "The request to Gemini failed.";
+      }
       return null;
     }
   }
@@ -234,8 +259,32 @@ function parseFacts(text: string): CallFacts | null {
   try {
     return normalizeFacts(JSON.parse(extractJsonObject(text)));
   } catch {
+    console.warn(`Eligibility: Gemini's reply was not valid JSON (it started: ${JSON.stringify(text.slice(0, 200))})`);
     return null;
   }
+}
+
+// Gemini sometimes answers in prose instead of the JSON shape (most often when
+// it has been searching, or when the page is an award rather than a grant). One
+// cheap follow-up asks it to put what it said into the shape — no tools, JSON
+// mode — if there is time left.
+async function factsFromReply(ai: GoogleGenAI, text: string, started: number, diag: Diag): Promise<CallFacts | null> {
+  const facts = parseFacts(text);
+  if (facts) return facts;
+  if (Date.now() - started > 42_000) {
+    diag.reason = "Gemini replied, but not in a form that could be read, and there was no time left to retry.";
+    return null;
+  }
+  const repair = `The text below is an analysis of a funding or award opportunity. Put what it says into ONE JSON object of exactly the shape below. Use only what the text states; use "unclear", null or [] for anything it does not say.
+
+${SHAPE}
+
+--- TEXT ---
+${text.slice(0, 12_000)}`;
+  const result = await callGemini(ai, "sources", repair, [], started, diag);
+  const repaired = result ? parseFacts(result.text) : null;
+  if (!repaired && !diag.reason) diag.reason = "Gemini replied, but its answer could not be read.";
+  return repaired;
 }
 
 export async function POST(request: Request) {
@@ -272,7 +321,7 @@ export async function POST(request: Request) {
 
   const { data: grant, error: fetchError } = await supabaseAdmin
     .from("grants")
-    .select("id, title, funder, application_url, rfp_url, deadline, geography, focus_areas, eligibility, description, eligibility_report")
+    .select("id, title, funder, application_url, rfp_url, deadline, geography, focus_areas, eligibility, description, type_of_funding, eligibility_report")
     .eq("id", grantId)
     .maybeSingle();
 
@@ -350,10 +399,11 @@ export async function POST(request: Request) {
 
   let facts: CallFacts | null = null;
   let sources: string[] = [];
+  const diag: Diag = { reason: null };
 
   if (gathered && coverageCap !== "landing_page_only") {
-    const result = await callGemini(ai, "sources", buildPrompt("sources", grant, gathered), gathered.parts as Part[], started);
-    facts = result ? parseFacts(result.text) : null;
+    const result = await callGemini(ai, "sources", buildPrompt("sources", grant, gathered), gathered.parts as Part[], started, diag);
+    facts = result ? await factsFromReply(ai, result.text, started, diag) : null;
     if (facts) {
       sources = gathered.used;
       // The model grades its own coverage and can overrate a summary page —
@@ -365,8 +415,8 @@ export async function POST(request: Request) {
   }
 
   if (!facts && Date.now() - started < MIN_MS_FOR_FALLBACK) {
-    const result = await callGemini(ai, "tools", buildPrompt("tools", grant, null), [], started);
-    facts = result ? parseFacts(result.text) : null;
+    const result = await callGemini(ai, "tools", buildPrompt("tools", grant, null), [], started, diag);
+    facts = result ? await factsFromReply(ai, result.text, started, diag) : null;
     if (facts) {
       sources = result?.urlsRead && result.urlsRead.length ? result.urlsRead : [grant.application_url];
       // If Gemini reported url_context metadata and NOT ONE page was read
@@ -381,11 +431,19 @@ export async function POST(request: Request) {
   }
 
   if (!facts) {
+    const elapsed = Math.round((Date.now() - started) / 1000);
+    const why =
+      diag.reason ??
+      (Date.now() - started >= MIN_MS_FOR_FALLBACK
+        ? `Reading the page and finding the official link used up the time available (${elapsed}s) before Gemini could be asked.`
+        : "The page could not be read.");
+    console.error(`Eligibility check gave up after ${elapsed}s: ${why}`);
     return Response.json(
-      { error: "Gemini did not return a usable response. Try again shortly." },
+      { error: `Gemini did not return a usable response. ${why} ${linkNote ? `(${linkNote}) ` : ""}Try again in a minute; if it repeats, open the link and check it is the opportunity's own page.` },
       { status: 502 }
     );
   }
+  if (isAward(grant)) facts.is_award = true;
   if (!facts.rfp_url) facts.rfp_url = grant.application_url;
   // No deadline in the documents? Use the scraper's stored one (if still ahead).
   applyDeadlineFallback(facts, grant.deadline);

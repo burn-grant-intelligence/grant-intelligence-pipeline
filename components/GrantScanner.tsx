@@ -19,6 +19,10 @@ const GEOGRAPHY_OPTIONS = ["Any geography", "Africa-focused", "Global", "East Af
 // same grants table, tagged with this focus area (and type_of_funding
 // "Cash prize award" when there is a cash prize).
 const AWARD_TAG = "awards & prizes";
+// Keep in step with AWARD_GRACE_DAYS in scripts/gemini_discover.py: an award
+// whose entry deadline passed within this many days stays visible, flagged,
+// because award deadlines are often extended.
+const AWARD_GRACE_DAYS = 7;
 const TYPE_OPTIONS = [
   { label: "All opportunities", value: "all" },
   { label: "Grants & calls", value: "grants" },
@@ -104,6 +108,18 @@ export default function GrantScanner() {
   // through its own deadline day.
   function isExpired(grant: Grant) {
     if (!grant.deadline) return false;
+    const deadline = new Date(grant.deadline);
+    if (Number.isNaN(deadline.getTime())) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (isAward(grant)) today.setDate(today.getDate() - AWARD_GRACE_DAYS);
+    return deadline < today;
+  }
+
+  // An award inside its grace window: the deadline has passed, the page may
+  // still show it open — the card says "check for an extension".
+  function deadlineJustPassed(grant: Grant) {
+    if (!grant.deadline || !isAward(grant)) return false;
     const deadline = new Date(grant.deadline);
     if (Number.isNaN(deadline.getTime())) return false;
     const today = new Date();
@@ -342,6 +358,11 @@ export default function GrantScanner() {
                       🏆 Award
                     </span>
                   )}
+                  {deadlineJustPassed(grant) && (
+                    <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-700">
+                      Deadline passed · check for extension
+                    </span>
+                  )}
                   {isFromLinkedIn(grant) && (
                     <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
                       LinkedIn
@@ -396,7 +417,7 @@ export default function GrantScanner() {
                     {award ? "Prize " : ""}{grant.currency ?? "USD"} {grant.amount.toLocaleString()}
                   </span>
                 )}
-                {grant.deadline && <span>{award ? "Entries close" : "Closes"} {grant.deadline}</span>}
+                {grant.deadline && <span>{award ? (deadlineJustPassed(grant) ? "Entries closed" : "Entries close") : "Closes"} {grant.deadline}</span>}
                 {grant.geography && <span>{grant.geography}</span>}
               </div>
 

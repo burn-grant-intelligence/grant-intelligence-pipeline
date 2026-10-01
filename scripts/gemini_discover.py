@@ -1,6 +1,10 @@
 """
 Clean cooking / clean energy opportunity + event discovery via Gemini.
 
+Two modes:
+  python scripts/gemini_discover.py           funding opportunities + events (gemini-discover.yml)
+  python scripts/gemini_discover.py --awards  awards, prizes and competitions only (awards-discover.yml)
+
 Uses Gemini's built-in Google Search grounding to find candidate items
 matching BURN's profile — both funding opportunities (RFPs, EOIs, calls for
 proposals, "Call for Solutions", tenders, results-based financing calls) and
@@ -9,6 +13,7 @@ per-candidate call using Gemini's url_context tool to actually read that
 candidate's page and extract full structured fields.
 """
 
+import argparse
 import hashlib
 import json
 import os
@@ -51,6 +56,17 @@ MAX_EVENTS_PER_RUN = 50
 MAX_ITEMS_PER_OPPORTUNITY_PAGE = 15
 MAX_EVENTS_PER_PAGE = 10  # events taken from one fixed events-listing page
 
+# Awards & prizes (--awards mode only — see run_awards()). One discovery call
+# per theme in config/sources.yaml `award_themes`, each capped at
+# MAX_AWARDS_PER_THEME; MAX_AWARDS_PER_RUN caps the discovered total (fixed
+# award_sources are checked on top of that).
+MAX_AWARDS_PER_THEME = 8
+MAX_AWARDS_PER_RUN = 30
+# Added to every award's focus_areas so the Grant Scanner's "Awards & prizes"
+# filter (components/GrantScanner.tsx) can find them without a new column.
+AWARD_TAG = "awards & prizes"
+CASH_PRIZE_FUNDING_TYPE = "Cash prize award"  # must match FUNDING_TYPES in lib/pipeline.ts
+
 GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_BACKOFF_SECONDS = 20
 GEMINI_PACING_SECONDS = 2.0
@@ -75,6 +91,19 @@ FIXED_EVENT_SOURCES = [
     {"title": f"Events listed on {urlparse(url).hostname or url}", "url": url}
     for url in (_sources_config.get("event_sources") or [])
     if isinstance(url, str) and url.strip()
+]
+
+# Known award pages checked on every --awards run, and the themes the awards
+# discovery searches (one Gemini call each). Both optional.
+FIXED_AWARD_SOURCES = [
+    source
+    for source in (_sources_config.get("award_sources") or [])
+    if isinstance(source, dict) and source.get("title") and source.get("url")
+]
+AWARD_THEMES = [
+    theme.strip()
+    for theme in (_sources_config.get("award_themes") or [])
+    if isinstance(theme, str) and theme.strip()
 ]
 
 _taxonomy = _load_yaml("taxonomy.yaml")
@@ -114,6 +143,7 @@ _PROMPT_VALUES = {
     "max_events": MAX_EVENTS_PER_RUN,
     "max_items_per_opportunity_page": MAX_ITEMS_PER_OPPORTUNITY_PAGE,
     "max_events_per_page": MAX_EVENTS_PER_PAGE,
+    "max_awards_per_theme": MAX_AWARDS_PER_THEME,
     "core_topics": "\n".join(f"- {topic}" for topic in CORE_EVENT_TOPICS),
     "primary_topics": "\n".join(f"- {topic}" for topic in PRIMARY_EVENT_TOPICS),
     "secondary_topics": "\n".join(f"- {topic}" for topic in SECONDARY_EVENT_TOPICS),
@@ -136,6 +166,12 @@ EVENT_DISCOVERY_PROMPT = render_prompt(PROMPTS["event_discovery"], **_PROMPT_VAL
 # extract_opportunity() / extract_event().
 OPPORTUNITY_EXTRACTION_PROMPT_TEMPLATE = render_prompt(PROMPTS["opportunity_extraction"], **_PROMPT_VALUES)
 EVENT_EXTRACTION_PROMPT_TEMPLATE = render_prompt(PROMPTS["event_extraction"], **_PROMPT_VALUES)
+
+# Awards: {award_theme} is left in the discovery template (filled per theme)
+# and {url}/{title} in the extraction one. .get() so the normal run still
+# works with an older prompts.yaml that has no award prompts yet.
+AWARD_DISCOVERY_PROMPT_TEMPLATE = render_prompt(PROMPTS.get("award_discovery") or "", **_PROMPT_VALUES)
+AWARD_EXTRACTION_PROMPT_TEMPLATE = render_prompt(PROMPTS.get("award_extraction") or "", **_PROMPT_VALUES)
 
 
 def extract_json_object(text: str) -> str:
@@ -496,9 +532,11 @@ def _remember_event(title: str, start_date) -> None:
     _seen_event_signatures.append((_title_tokens(title), _parse_date(start_date), title))
 
 
-def save_opportunity(fields: dict, candidate: dict) -> bool:
+def save_opportunity(fields: dict, candidate: dict, extra: dict | None = None, label: str = "opportunity") -> bool:
     """Upsert one extracted opportunity into `grants`, tagged source_type
-    'gemini' so the Grant Scanner shows a green pill on it."""
+    'gemini' so the Grant Scanner shows a green pill on it. `extra` adds more
+    columns (awards use it for type_of_funding); None values in it are left
+    out, so an upsert never blanks a value someone filled in by hand."""
     title = str(fields.get("title") or "").strip()
     if not title:
         return False
@@ -538,6 +576,7 @@ def save_opportunity(fields: dict, candidate: dict) -> bool:
         "source_type": "gemini",
         "last_seen_at": datetime.now(timezone.utc).isoformat(),
     }
+    row.update({k: v for k, v in (extra or {}).items() if v is not None})
 
     response = requests.post(
         f"{SUPABASE_URL}/rest/v1/grants",
@@ -563,7 +602,7 @@ def save_opportunity(fields: dict, candidate: dict) -> bool:
         return False
     _remember_title("grants", title)
     print(
-        f"    + [opportunity] {title}"
+        f"    + [{label}] {title}"
         + (f"  (deadline {fields['deadline']})" if fields.get("deadline") else "")
     )
     return True
@@ -867,7 +906,212 @@ def classify_event(fields: dict, raw_text: str) -> dict | None:
     }
 
 
-def main() -> None:
+# --- Awards & prizes (--awards) -------------------------------------------
+#
+# Awards are saved into the same `grants` table as funding opportunities, so
+# they show up in the Grant Scanner and can be tracked, eligibility-checked and
+# put in the Opportunity Pipeline like any other opportunity. What marks them
+# as awards: AWARD_TAG in focus_areas (the Grant Scanner's "Awards & prizes"
+# filter) and type_of_funding = "Cash prize award" when there is a cash prize.
+
+_WINNERS_TITLE = re.compile(r"\b(winners?|finalists|shortlist(ed)?|laureates)\b.*\b(announced|revealed|named|unveiled)\b|\bannounc\w* (the )?(winners|finalists|shortlist)\b", re.IGNORECASE)
+
+
+def looks_like_winners_announcement(title: str) -> bool:
+    """Deterministic backstop to the prompts: "Winners announced for ...",
+    "Finalists revealed ..." and the like are news, not open awards."""
+    return bool(_WINNERS_TITLE.search(str(title)))
+
+
+def _clean_text(value, max_len: int = 600) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = re.sub(r"\s+", " ", value).strip()
+    if not text or text.lower() in {"null", "none", "n/a", "unknown", "not stated"}:
+        return None
+    return text if len(text) <= max_len else text[: max_len - 1].rstrip() + "…"
+
+
+def award_to_grant_fields(fields: dict) -> tuple[dict, dict]:
+    """Maps one award from award_extraction onto the `grants` columns
+    save_opportunity() writes, plus the `extra` columns. Pure function (see
+    test/awards_discovery_test.py). The award-only details (what winners get, how to
+    enter, entry fee, categories) are folded into `eligibility`, which the
+    Grant Scanner shows when a card is opened."""
+    cash = fields.get("cash_prize") is True
+    value = fields.get("prize_value")
+    amount = (
+        value
+        if cash and isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+        else None
+    )
+
+    focus = []
+    for tag in fields.get("focus_areas") or []:
+        tag = _clean_text(tag, 60)
+        if tag and tag.lower() not in {f.lower() for f in focus}:
+            focus.append(tag)
+    if AWARD_TAG not in {f.lower() for f in focus}:
+        focus.append(AWARD_TAG)
+
+    details = []
+    prize = _clean_text(fields.get("prize_summary"), 200)
+    details.append(f"Prize: {prize}" if prize else ("Prize: cash prize (amount not stated)" if cash else "Prize: recognition (no cash prize stated)"))
+    route = _clean_text(fields.get("entry_route"), 60)
+    if route:
+        details.append(f"Entry: {route}")
+    fee = _clean_text(fields.get("entry_fee"), 80)
+    if fee:
+        details.append(f"Entry fee: {fee}")
+    categories = [c for c in (_clean_text(c, 80) for c in (fields.get("categories") or [])) if c]
+    if categories:
+        details.append("Categories to consider: " + ", ".join(categories[:6]))
+    who = _clean_text(fields.get("eligibility"), 500)
+    eligibility = (f"{who} — " if who else "") + " · ".join(details)
+
+    grant_fields = {
+        "title": _clean_text(fields.get("title"), 200),
+        "funder": _clean_text(fields.get("organizer"), 200),
+        "amount": amount,
+        "currency": _clean_text(fields.get("currency"), 10) if amount is not None else None,
+        "deadline": fields.get("deadline") if _parse_date(fields.get("deadline")) else None,
+        "geography": _clean_text(fields.get("geography"), 200),
+        "focus_areas": focus,
+        "eligibility": eligibility,
+        "description": _clean_text(fields.get("description"), 800),
+        "fit_analysis": _clean_text(fields.get("fit_analysis"), 1200),
+        "application_url": fields.get("application_url")
+        if isinstance(fields.get("application_url"), str) and fields["application_url"].startswith("http")
+        else None,
+    }
+    extra = {"type_of_funding": CASH_PRIZE_FUNDING_TYPE if cash else None}
+    return grant_fields, extra
+
+
+def discover_awards() -> list[dict]:
+    """One Google-Search discovery call per award theme. De-duplicated across
+    themes (by URL and loose title), capped at MAX_AWARDS_PER_RUN."""
+    found: list[dict] = []
+    seen_keys: set[str] = set()
+    for i, theme in enumerate(AWARD_THEMES):
+        if i:
+            time.sleep(GEMINI_PACING_SECONDS)
+        prompt = render_prompt(AWARD_DISCOVERY_PROMPT_TEMPLATE, award_theme=theme)
+        batch = _discover(prompt, "award", MAX_AWARDS_PER_THEME)
+        print(f"  theme \"{theme[:60]}\": {len(batch)} candidate(s)")
+        for c in batch:
+            keys = {c["url"].rstrip("/").lower(), _loose_title_key(c["title"])}
+            if keys & seen_keys:
+                continue
+            seen_keys |= keys
+            found.append(c)
+    return found[:MAX_AWARDS_PER_RUN]
+
+
+def extract_award(candidate: dict) -> list[dict]:
+    """Reads one award page; returns the open awards found on it (usually
+    zero or one). An empty list means nothing to save, not an error."""
+    prompt = render_prompt(
+        AWARD_EXTRACTION_PROMPT_TEMPLATE,
+        url=candidate["url"],
+        title=candidate["title"],
+    )
+    text = call_gemini(
+        prompt,
+        [
+            types.Tool(url_context=types.UrlContext()),
+            types.Tool(google_search=types.GoogleSearch()),
+        ],
+    )
+    if not text:
+        return []
+    try:
+        parsed = json.loads(extract_json_object(text))
+    except (json.JSONDecodeError, TypeError):
+        print(f"    ! unparseable JSON from award extraction (raw reply started: {text[:200]!r})")
+        return []
+    awards = parsed.get("awards") if isinstance(parsed, dict) else None
+    if not awards or not isinstance(awards, list):
+        print(f"    (Gemini returned no open awards; raw reply started: {text[:200]!r})")
+        return []
+    valid = [a for a in awards if isinstance(a, dict) and a.get("title")]
+    return valid[:MAX_ITEMS_PER_OPPORTUNITY_PAGE]
+
+
+def save_award(fields: dict, candidate: dict) -> bool:
+    title = str(fields.get("title") or "").strip()
+    if looks_like_winners_announcement(title):
+        print(f"    - skipped (a winners/finalists announcement, not an open award): {title}")
+        return False
+    grant_fields, extra = award_to_grant_fields(fields)
+    return save_opportunity(grant_fields, candidate, extra=extra, label="award")
+
+
+def run_awards() -> None:
+    if not AWARD_DISCOVERY_PROMPT_TEMPLATE or not AWARD_EXTRACTION_PROMPT_TEMPLATE:
+        print("! config/prompts.yaml has no award_discovery / award_extraction prompts — upload the updated file first.")
+        sys.exit(1)
+    print("Gemini discovery — awards, prizes and competitions")
+    saved = 0
+
+    # Fixed award pages first, every run (they bypass seen_urls(), like the
+    # fixed opportunity sources, so a new edition of a known award is picked up).
+    if FIXED_AWARD_SOURCES:
+        print(f"\nChecking {len(FIXED_AWARD_SOURCES)} fixed award source(s)")
+        for source in FIXED_AWARD_SOURCES:
+            print(f"  → [fixed] {source['title'][:70]}")
+            fields_list = extract_award(source)
+            if not fields_list:
+                print("    - nothing open right now; skipped")
+            for fields in fields_list:
+                if save_award(fields, source):
+                    saved += 1
+            time.sleep(GEMINI_PACING_SECONDS)
+
+    if not AWARD_THEMES:
+        print("\nNo award_themes in config/sources.yaml — skipping the search step.")
+        candidates = []
+    else:
+        print(f"\nSearching {len(AWARD_THEMES)} award theme(s)")
+        candidates = discover_awards()
+    print(f"\n{len(candidates)} award candidate(s) found via search")
+
+    fresh = []
+    if candidates:
+        already = seen_urls([c["url"] for c in candidates])
+        fixed_urls = {s["url"].rstrip("/").lower() for s in FIXED_AWARD_SOURCES}
+        fresh = [
+            c for c in candidates
+            if c["url"] not in already
+            and c["url"].rstrip("/").lower() not in fixed_urls
+            and not looks_like_winners_announcement(c["title"])
+        ]
+        print(f"{len(fresh)} new candidate(s) to read ({len(candidates) - len(fresh)} seen before)")
+
+    for candidate in fresh:
+        print(f"  → [award] {candidate['title'][:70]}")
+        fields_list = extract_award(candidate)
+        if not fields_list:
+            print("    - nothing open right now; skipped")
+        for fields in fields_list:
+            if save_award(fields, candidate):
+                saved += 1
+        time.sleep(GEMINI_PACING_SECONDS)
+
+    print(f"\nDone. {saved} award(s)/prize(s) added to the Grant Scanner (filter: Awards & prizes).")
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Gemini discovery for the Grant Intelligence tool.")
+    parser.add_argument(
+        "--awards",
+        action="store_true",
+        help="find open awards, prizes and competitions only (instead of funding opportunities + events)",
+    )
+    if parser.parse_args(argv).awards:
+        run_awards()
+        return
+
     print("Gemini discovery — searching for candidate opportunities and events")
 
     saved_opportunities = 0

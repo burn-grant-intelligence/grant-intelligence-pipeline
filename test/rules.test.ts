@@ -66,7 +66,7 @@ const cases: Case[] = [
   { name: "Minimum 50M units sold → not fit", expect: "not_fit", mustMention: "units sold", mutate: (f) => { f.applicant.min_units_sold = 50_000_000; } },
   { name: "Minimum 1M units sold → fit", expect: "fit", mutate: (f) => { f.applicant.min_units_sold = 1_000_000; } },
   { name: "ISO tier 4 for electric, BURN tier unknown → watch-out", expect: "fit", mustMention: "aren't configured", mutate: (f) => { f.sector.eligible_technologies = ["electric"]; f.product_requirements = { min_iso_tier: 4, certifications_required: [], evidence: "Tier 4" }; } },
-  { name: "Local registration required in Kenya (no configured entity) → watch-out", expect: "fit", mustMention: "no configured local entity", mutate: (f) => { f.geography.countries = ["Kenya"]; f.applicant.local_registration_required = "yes"; } },
+  { name: "Local registration required where no local company is configured → watch-out", expect: "fit", mustMention: "no configured local entity", profile: { countries: [{ name: "Kenya", presence: "manufacturing" }] }, mutate: (f) => { f.geography.countries = ["Kenya"]; f.applicant.local_registration_required = "yes"; } },
   { name: "Local registration required in Uganda (entity exists) → pass", expect: "fit", mutate: (f) => { f.geography.countries = ["Uganda"]; f.applicant.local_registration_required = "yes"; } },
   { name: "Deadline not stated → needs review", expect: "needs_review", mutate: (f) => { f.deadline = { date: null, is_rolling: false, status: "unclear", evidence: null }; } },
   { name: "LPG-only call → watch-out (limited line)", expect: "fit", mustMention: "limited line", mutate: (f) => { f.sector.eligible_technologies = ["lpg"]; } },
@@ -156,6 +156,30 @@ console.log("\n──────── normalizeFacts ────────"
   check(buildReport(empty, meta, undefined, NOW).verdict === "needs_review", "empty input → needs_review, never fit");
   const tpl = schemaToTemplate(FACTS_SCHEMA);
   check(typeof tpl.geography.scope === "string" && tpl.geography.scope.includes("specific_countries") && Array.isArray(tpl.documents_required), "schemaToTemplate mirrors FACTS_SCHEMA");
+}
+
+// ── plain-language summaries ──
+console.log("\n──────── summary wording ────────");
+{
+  const run = (mutate: (f: any) => void, link?: string | null) => { const f = base(); mutate(f); return buildReport(normalizeFacts(f), { ...meta, link }, undefined, NOW); };
+  const closed = run((f) => { f.deadline = { date: "2026-09-25", is_rolling: false, status: "closed", evidence: "closed" }; });
+  check(closed.summary.startsWith("the blocking issue is the deadline:") && closed.summary.includes("25 Sep 2026") && closed.summary.includes("already passed"), "closed call → 'the blocking issue is the deadline … 25 Sep 2026 … already passed'", `  (${closed.summary})`);
+  check(closed.notes_text.startsWith("NOT A FIT — "), "notes head reads 'NOT A FIT'");
+  const two = run((f) => { f.deadline = { date: "2026-09-25", is_rolling: false, status: "closed", evidence: "" }; f.applicant.eligible_org_types = ["ngo_nonprofit"]; });
+  check(two.summary.startsWith("there are 2 blocking issues.") && two.summary.includes("(1) the deadline") && two.summary.includes("(2) the applicant type"), "two blockers are numbered in plain words", `  (${two.summary})`);
+  const ngo = run((f) => { f.applicant.eligible_org_types = ["ngo_nonprofit"]; });
+  check(ngo.summary.startsWith("the blocking issue is the applicant type:") && ngo.summary.includes("for-profit"), "NGO-only → names the applicant type", `  (${ngo.summary})`);
+  const clean = run(() => {});
+  check(clean.verdict === "fit" && clean.summary === "meets all the requirements we could check, with nothing to watch.", "clean fit wording", `  (${clean.summary})`);
+  const watch = run((f) => { f.submission_languages = ["French"]; });
+  check(watch.verdict === "fit" && watch.summary.includes("1 point to watch: language"), "fit with a watch-out names it", `  (${watch.summary})`);
+  const landing = run((f) => { f.source_coverage = "landing_page_only"; });
+  check(landing.verdict === "needs_review" && landing.summary.includes("couldn't read enough of the call") && landing.summary.includes("account or login"), "landing page only → asks for a manual look and mentions logins", `  (${landing.summary})`);
+  const withLink = run((f) => { f.source_coverage = "landing_page_only"; }, "The page looks like it needs an account or login to show the full call details");
+  check(withLink.summary.includes("needs an account or login to show the full call details.") && withLink.notes_text.includes("LINK: "), "a link note replaces the generic hint and is saved in the notes");
+  const unclear = run((f) => { f.sector.covers_clean_cooking = "unclear"; });
+  check(unclear.verdict === "needs_review" && unclear.summary.includes("couldn't be confirmed from the call: sector"), "unclear criterion is named", `  (${unclear.summary})`);
+  check(!/private profile|profile was not loaded/i.test([clean, closed, landing, unclear].map((r) => r.notes_text).join(" ")), "no wording about a profile not being loaded, anywhere");
 }
 
 console.log("\n──────── sample notes: consortium + stacking + tight deadline ────────");

@@ -17,6 +17,7 @@
 #   {url}, {title}                    the candidate being read (the *_extraction prompts)
 #   {award_theme}                     one entry of config/sources.yaml `award_themes` (award_discovery only)
 #   {max_awards_per_theme}            MAX_AWARDS_PER_THEME (award_discovery only)
+#   {award_grace_days}                AWARD_GRACE_DAYS (award prompts only)
 #
 # Any other braces — e.g. the JSON examples — are left exactly as written, so
 # write them normally (single braces, no escaping). Only lowercase
@@ -756,7 +757,9 @@ award_discovery: |
 
   EXCLUSIONS — do NOT include:
   - Winner announcements, shortlists, finalist lists or ceremony recaps for a round that is no longer accepting entries.
-  - Anything whose entry/nomination deadline is before {today}, or whose page says entries are closed.
+  - Anything whose page says entries are closed, or whose entry/nomination deadline passed MORE than {award_grace_days} days before {today}.
+    EXCEPTION: if the deadline passed within the last {award_grace_days} days but the award page still invites entries (a banner such as "apply now" or
+    "applications open", or a portal still accepting submissions), INCLUDE it with its real deadline — deadlines are often extended. The system flags it.
   - Awards open ONLY to students, academic researchers, school pupils, or young people under an age limit (a youth CATEGORY alongside a company category is fine).
   - Awards open ONLY to early-stage start-ups / pre-revenue ventures, if no category fits an established manufacturer.
   - Awards restricted to companies or residents of one specific NON-African country or region (e.g. "German companies only") with no route for
@@ -801,7 +804,8 @@ award_extraction: |-
   to load), search for the award's official page and its CURRENT edition, read that page instead, and use it. Only return nothing if, after
   trying, you still cannot find the current edition's details.
 
-  Today's date is {today}. Use it to judge whether the entry deadline has passed.
+  Today's date is {today}. Use it to judge whether the entry deadline has passed. A deadline that passed within the last {award_grace_days} days does NOT
+  disqualify an award whose page still invites entries (see the rule on returning nothing, below) — keep the real deadline date; the system adds the warning.
 
   {burn_profile}
 
@@ -836,7 +840,8 @@ award_extraction: |-
 
   Return { "awards": [] } only if the page is:
   - a winners / finalists / shortlist announcement or ceremony recap with no open entry window;
-  - an award whose entry deadline is before {today}, or whose entries are stated to be closed;
+  - an award whose entries are stated to be closed, or whose entry deadline passed more than {award_grace_days} days before {today}, or passed within that window
+    while the page no longer invites entries (a deadline that just passed but the page still says "apply now" is NOT a reason to return nothing);
   - open ONLY to students, academics, school pupils or people under an age limit;
   - open ONLY to early-stage start-ups, with no category an established manufacturer could enter;
   - restricted to companies or residents of one specific non-African country or region, with no route for companies operating in Africa;

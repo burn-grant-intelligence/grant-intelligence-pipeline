@@ -1,0 +1,44 @@
+name: Awards discovery
+
+# Finds CURRENTLY OPEN awards, prizes and competitions (sustainability,
+# innovation, SDG 7, clean energy, energy transition, clean cooking, poverty
+# alleviation, conservation, African business, women in energy …) using
+# Gemini's Google Search + url_context tools, and saves them into `grants`
+# so they appear in the Grant Scanner under the "Awards & prizes" filter.
+#
+# What it searches is set in config/sources.yaml (award_sources, award_themes)
+# and config/prompts.yaml (award_discovery, award_extraction) — no code
+# changes needed to steer it.
+#
+# Mondays and Thursdays, so it never overlaps the Tuesday/Friday
+# gemini-discover.yml run (both share the same Gemini quota). Award season
+# runs roughly September–January; drop to once a week after that.
+
+on:
+  schedule:
+    - cron: '30 6 * * 1,4' # 06:30 UTC, Mondays and Thursdays
+  workflow_dispatch: {} # lets you trigger a run manually from the Actions tab
+
+jobs:
+  awards:
+    runs-on: ubuntu-latest
+    # Up to 9 fixed award pages + 6 theme searches + 30 discovered awards
+    # ≈ 45 Gemini calls at ~12s each ≈ 9 minutes; 25 leaves room for retries.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests==2.32.3 google-genai==2.23.0 pyyaml==6.0.2
+
+      - name: Run awards discovery
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python scripts/gemini_discover.py --awards

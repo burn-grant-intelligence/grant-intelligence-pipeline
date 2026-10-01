@@ -155,9 +155,58 @@ export interface TrackerItem {
   // "auto" = the eligibility check (a re-check may update it), "manual" = a
   // person (a re-check never overwrites it), null = undecided.
   fit_source?: FitSource | null;
+  // Opportunity Pipeline "Breakdown" (supabase/opportunity_pipeline_migration_2026-10-01.sql).
+  // The Lead is `owner` above and the Type of funding is Grant.type_of_funding.
+  // Where a field is empty, the screens fall back to what the grant record
+  // already has (see effectiveFields in lib/pipeline.ts).
+  pipeline_category?: PipelineCategory | null;
+  pipeline_status?: PipelineStatusCode | null;
+  program_name?: string | null;
+  pipeline_funder?: string | null;
+  pipeline_description?: string | null;
+  target_countries?: string[] | null;
+  product_types?: string[] | null;
+  ticket_size?: string | null;
+  requested_amount_usd?: number | null;
+  pipeline_deadline?: string | null; // ISO date
+  pipeline_link?: string | null;
+  link_check_note?: string | null;
+  link_checked_at?: string | null;
+  submission_date?: string | null; // ISO date
   created_at: string;
   updated_at: string;
   grant: Grant | null;
+}
+
+export type PipelineCategory = "solicited" | "unsolicited" | "partnerships" | "award";
+export type PipelineStatusCode = "1a" | "1b" | "2a" | "2b" | "2c" | "3a" | "3b" | "3c" | "4a" | "4b" | "4c";
+
+// One meeting's notes on an opportunity (opportunity_notes table).
+export interface OpportunityNote {
+  id: string;
+  tracker_item_id: string;
+  meeting_date: string; // ISO date
+  notes: string;
+  author: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// An action point (action_items table): a task, or a meeting with someone,
+// owned by one person, optionally linked to the meeting notes it came from.
+export interface ActionItem {
+  id: string;
+  tracker_item_id: string;
+  note_id: string | null;
+  kind: "task" | "meeting";
+  description: string;
+  meeting_with: string | null;
+  assignee: string | null;
+  due_date: string | null; // ISO date
+  done: boolean;
+  done_at: string | null;
+  created_by: string | null;
+  created_at: string;
 }
 
 // A row in the Management Dashboard's "Key priorities" sub-tab

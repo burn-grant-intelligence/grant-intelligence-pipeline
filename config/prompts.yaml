@@ -14,7 +14,9 @@
 #   {geography_priority}              numbered geography_priority list from config/company.yaml
 #   {fixed_opportunity_sources}       "- title: url" list from config/sources.yaml `sources`
 #   {fixed_event_sources}             "- Events listed on host: url" list from config/sources.yaml `event_sources`
-#   {url}, {title}                    the candidate being read (opportunity_extraction only)
+#   {url}, {title}                    the candidate being read (the *_extraction prompts)
+#   {award_theme}                     one entry of config/sources.yaml `award_themes` (award_discovery only)
+#   {max_awards_per_theme}            MAX_AWARDS_PER_THEME (award_discovery only)
 #
 # Any other braces — e.g. the JSON examples — are left exactly as written, so
 # write them normally (single braces, no escaping). Only lowercase
@@ -713,3 +715,134 @@ event_extraction: |
   Otherwise return:
 
   { "events": [] }
+
+# ---------------------------------------------------------------------------
+# AWARDS & PRIZES (added 2026-10-01) — used only by
+# `python scripts/gemini_discover.py --awards` (.github/workflows/awards-discover.yml).
+# award_discovery runs once per theme in config/sources.yaml `award_themes`;
+# {award_theme} is filled per call. award_extraction reads one award page.
+# ---------------------------------------------------------------------------
+
+# Discovery (Google Search) — finds candidate awards, prizes and competitions for ONE theme.
+award_discovery: |
+  Today's date is {today}. Use Google Search to find up to {max_awards_per_theme} awards, prizes, competitions or challenges that are
+  CURRENTLY OPEN for applications or nominations and that the company described below could enter.
+
+  {burn_profile}
+
+  THEME FOR THIS SEARCH: {award_theme}
+
+  WHAT COUNTS AS AN AWARD OR PRIZE
+
+  An award, prize, competition, challenge or recognition programme with an open entry window right now, that a company (or one of its leaders,
+  for its work at the company) can apply to, enter, or be nominated for. Include:
+  - cash prizes and prize competitions (e.g. innovation prizes, "challenge" prizes, prize funds);
+  - recognition awards with no cash (they bring visibility, credibility and media coverage) — e.g. sustainability, SDG, innovation, impact,
+    climate, energy, environment, social-enterprise, inclusive-business, manufacturing-excellence and African business awards;
+  - leadership awards (e.g. women in energy / climate leadership) when a company executive could be entered for work at the company;
+  - awards with several categories where at least one category fits an established company.
+  Examples of the kind of thing wanted: the SDG Innovation Award (Senate of Economy + UNIDO), Ashden Awards, Energy Globe Award, Zayed
+  Sustainability Prize, Keeling Curve Prize, UN Global Climate Action Awards. Find OTHER, less obvious ones too — national and regional awards
+  in Africa, awards run by industry associations, development banks, foundations, media groups, universities and UN agencies.
+
+  Awards are often seasonal: many open between September and January. Look for the CURRENT edition (2026 or 2027) specifically.
+
+  HOW TO SEARCH
+
+  Search the theme above using combinations of: the theme's keywords + "award" / "prize" / "awards 2026" / "awards 2027" / "call for nominations"
+  / "call for entries" / "applications open" / "submit your project" / "competition" / "challenge"; + Africa, + each of these priority countries:
+  {geography_priority}
+  + "global" / "international". Also search known award organisers for their current edition.
+
+  EXCLUSIONS — do NOT include:
+  - Winner announcements, shortlists, finalist lists or ceremony recaps for a round that is no longer accepting entries.
+  - Anything whose entry/nomination deadline is before {today}, or whose page says entries are closed.
+  - Awards open ONLY to students, academic researchers, school pupils, or young people under an age limit (a youth CATEGORY alongside a company category is fine).
+  - Awards open ONLY to early-stage start-ups / pre-revenue ventures, if no category fits an established manufacturer.
+  - Awards restricted to companies or residents of one specific NON-African country or region (e.g. "German companies only") with no route for
+    companies operating in Africa.
+  - Paid courses, accelerators or programmes the company would pay to join.
+  - Pay-to-win or vanity awards where winning or being listed depends on buying a sponsorship, listing, advertising package or expensive tickets
+    (a normal, modest entry fee is fine — mention it).
+  - Awards purely for individuals' academic/artistic work, or sectors unrelated to energy, climate, environment, sustainability, innovation,
+    development/poverty alleviation, manufacturing or business (e.g. medical research, sports, film).
+
+  Lean broad within these rules — a human reviews every item, and fit is assessed later.
+
+  URL RULES
+  - The "url" must be the official award / entry page found through search — not a news article, social-media post or search-result link when
+    an official page exists. Never invent or construct a URL.
+  - Do not list the same award twice (different editions, categories or reposts of one award are ONE candidate).
+
+  OUTPUT
+
+  Respond with ONLY a JSON object — no markdown fences and no prose — of exactly this shape:
+  {
+    "candidates": [
+      {
+        "title": "Award name and edition, e.g. SDG Innovation Award 2026",
+        "url": "Official award or entry page",
+        "funder": "Organiser",
+        "deadline": "Confirmed entry deadline (YYYY-MM-DD) or 'Rolling'",
+        "geography": "Who can enter: countries / region / Global",
+        "why_relevant": "One sentence on the concrete link to the company"
+      }
+    ]
+  }
+  If nothing qualifies, respond with exactly: { "candidates": [] }
+
+# Extraction (url_context + Google Search) — reads one award page and returns
+# its structured fields. {url} and {title} are filled per candidate.
+award_extraction: |-
+  Read the page at the URL below using your url_context tool, then extract the award(s) / prize(s) it describes that are CURRENTLY OPEN for
+  entries or nominations, and assess how well each fits the company described below.
+
+  You also have Google Search. If the URL does not show the specific award "{title}" (a news list, a homepage, a past edition, or a page that fails
+  to load), search for the award's official page and its CURRENT edition, read that page instead, and use it. Only return nothing if, after
+  trying, you still cannot find the current edition's details.
+
+  Today's date is {today}. Use it to judge whether the entry deadline has passed.
+
+  {burn_profile}
+
+  URL to read first: {url}
+  This page was flagged as a likely "{title}" award — confirm or correct that from the actual content.
+
+  Respond with ONLY a JSON object — no markdown fences, no prose — of the shape:
+  { "awards": [ { ... } ] }
+
+  Each item must have exactly these fields (null for anything not stated — never guess):
+  {
+    "title": string,                  // award name + edition year, e.g. "SDG Innovation Award 2026"
+    "organizer": string | null,
+    "cash_prize": boolean,            // true only if the page states a cash / money prize for winners
+    "prize_value": number | null,     // the largest stated cash prize for a single winner, as a plain number
+    "currency": string | null,        // e.g. "USD", "EUR"
+    "prize_summary": string | null,   // what winners get, e.g. "USD 100,000 + mentoring and a London ceremony", or "Recognition, trophy and media coverage (no cash)"
+    "deadline": string | null,        // ISO "YYYY-MM-DD" entry/nomination deadline, only if a specific date is stated
+    "entry_route": "open application" | "self-nomination" | "nomination by a third party" | "invitation only" | null,
+    "entry_fee": string | null,       // e.g. "Free", "EUR 150 per entry"; null if not stated
+    "categories": string[],           // the award categories that could fit the company (empty if the award has no categories)
+    "geography": string | null,       // who can enter: countries / region / "Global"
+    "focus_areas": string[],          // choose from: clean energy, clean cooking, climate change, GHG reduction, energy transition, deforestation, manufacturing, women/gender, tech & innovation, engineering, AI/data
+    "eligibility": string | null,     // who may enter, in one or two sentences (organisation type, size, age limits, countries)
+    "description": string | null,     // 1-2 sentence neutral summary of the award
+    "application_url": string | null, // the entry / application portal if stated, otherwise the official award page
+    "fit_analysis": string | null     // 2-4 sentences, analyst tone: which category BURN should enter, what evidence it would use, and any mismatch (e.g. start-up only, single-country, nomination needed, entry fee, pay-to-win signals)
+  }
+
+  Lean toward EXTRACTING a genuine, currently open award even when fit is partial or details are thin — note concerns in fit_analysis and use
+  null for unknown fields. A human reviews every item.
+
+  Return { "awards": [] } only if the page is:
+  - a winners / finalists / shortlist announcement or ceremony recap with no open entry window;
+  - an award whose entry deadline is before {today}, or whose entries are stated to be closed;
+  - open ONLY to students, academics, school pupils or people under an age limit;
+  - open ONLY to early-stage start-ups, with no category an established manufacturer could enter;
+  - restricted to companies or residents of one specific non-African country or region, with no route for companies operating in Africa;
+  - a paid course, accelerator or programme the company would pay to join, or a pay-to-win / vanity listing;
+  - in an unrelated sector (medical research, sports, arts, etc.);
+  - not an award at all, broken, or paywalled with no visible content.
+
+  If the page lists several distinct open awards (e.g. an organiser's "our awards" page), extract EACH open one separately, up to
+  {max_items_per_opportunity_page} items. Several categories of ONE award are a single item — list the fitting ones in "categories".

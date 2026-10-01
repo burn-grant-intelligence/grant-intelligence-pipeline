@@ -2,7 +2,7 @@
 // Run: npx tsx test/rules.test.ts
 // (npx downloads tsx on demand — it is deliberately NOT added to package.json,
 // so package-lock.json stays in sync with what Vercel installs.)
-import { normalizeFacts, schemaToTemplate, FACTS_SCHEMA } from "../lib/eligibility/extract";
+import { normalizeFacts, schemaToTemplate, FACTS_SCHEMA, buildUserPrompt } from "../lib/eligibility/extract";
 import { assessDocuments, buildReport } from "../lib/eligibility/rules";
 import { BURN_PROFILE } from "../lib/eligibility/burnProfile";
 import type { Verdict } from "../lib/eligibility/types";
@@ -94,6 +94,31 @@ const cases: Case[] = [
   { name: "Local registration where the entity name is not in the profile → falls back to the country", expect: "fit", mustNotMention: "local registration", mutate: (f) => { f.geography.countries = ["Uganda"]; f.applicant.local_registration_required = "yes"; } },
   { name: "Co-financing 60% with no limit configured → not flagged", expect: "fit", mustNotMention: "match", mutate: (f) => { f.funding.cofinancing_required_pct = 60; } },
   { name: "Local registration in a manufacturing country that also has a local company (localEntity) → passes", expect: "fit", mustNotMention: "local registration", profile: { countries: [{ name: "Kenya", presence: "manufacturing", localEntity: true }] }, mutate: (f) => { f.geography.countries = ["Kenya"]; f.applicant.local_registration_required = "yes"; } },
+  // ── awards & prizes (added 2026-10-01) ──
+  { name: "Prize-only award with a USD 20k cash prize → the grant effort threshold is not applied", expect: "fit", mustNotMention: "effort threshold",
+    mutate: (f) => { f.funding = { instruments: ["prize"], min_award_usd: null, max_award_usd: 20000, evidence: "USD 20,000 prize" }; } },
+  { name: "Recognition-only award (no cash) → fit, nothing about award size", expect: "fit", mustNotMention: "effort threshold",
+    mutate: (f) => { f.funding = { instruments: ["prize"], min_award_usd: null, max_award_usd: null, evidence: null }; } },
+  { name: "A small GRANT still trips the effort threshold (rule unchanged for grants)", expect: "fit", mustMention: "effort threshold",
+    mutate: (f) => { f.funding = { instruments: ["grant"], min_award_usd: null, max_award_usd: 20000, evidence: "USD 20,000" }; } },
+  { name: "Prize that also gives a grant is judged as a grant", expect: "fit", mustMention: "effort threshold",
+    mutate: (f) => { f.funding = { instruments: ["prize", "grant"], min_award_usd: null, max_award_usd: 20000, evidence: "USD 20,000" }; } },
+  { name: "Broad sustainability award (cooking not mentioned) → needs review, not a hard fail", expect: "needs_review", mustMention: "Check whether a cooking project would qualify",
+    mutate: (f) => { f.funding = { instruments: ["prize"], min_award_usd: null, max_award_usd: null, evidence: null }; f.sector = { focus_areas: ["sustainability", "SDGs"], covers_clean_cooking: "unclear", eligible_technologies: [], excluded_technologies: [], evidence: "all SDGs" }; } },
+  // award deadlines that have only just passed (NOW is 29 Sep 2026)
+  { name: "Award, deadline passed 3 days ago, page not saying closed → needs review, not a fail", expect: "needs_review", mustMention: "often extended",
+    mutate: (f) => { f.is_award = true; f.funding = { instruments: ["prize"], min_award_usd: null, max_award_usd: null, evidence: null };
+      f.deadline = { date: "2026-09-26", is_rolling: false, status: "closed", evidence: "Apply by 26 September 2026" }; } },
+  { name: "Award, deadline passed 3 days ago, but the page says applications are closed → not a fit", expect: "not_fit", mustMention: "already passed",
+    mutate: (f) => { f.is_award = true; f.deadline = { date: "2026-09-26", is_rolling: false, status: "closed", evidence: "Applications are closed." }; } },
+  { name: "Award, deadline passed 10 days ago → not a fit (outside the 7-day window)", expect: "not_fit", mustMention: "already passed",
+    mutate: (f) => { f.is_award = true; f.deadline = { date: "2026-09-19", is_rolling: false, status: "open", evidence: "Apply by 19 Sep" }; } },
+  { name: "Prize-only facts without the award flag are treated the same way", expect: "needs_review", mustMention: "often extended",
+    mutate: (f) => { f.funding = { instruments: ["prize"], min_award_usd: null, max_award_usd: null, evidence: null }; f.deadline = { date: "2026-09-28", is_rolling: false, status: "closed", evidence: null }; } },
+  { name: "A GRANT whose deadline passed 3 days ago is still a hard fail", expect: "not_fit", mustMention: "already passed",
+    mutate: (f) => { f.deadline = { date: "2026-09-26", is_rolling: false, status: "closed", evidence: "Apply by 26 September 2026" }; } },
+  { name: "Start-up-only award → not a fit", expect: "not_fit", mustMention: "early-stage",
+    mutate: (f) => { f.funding = { instruments: ["prize"], min_award_usd: null, max_award_usd: 50000, evidence: null }; f.applicant.startup_or_early_stage_only = "yes"; } },
   { name: "Carbon restriction with no amount configured → no '$' or 'undefined' in the message", expect: "fit", mustMention: "active in carbon markets;", mutate: (f) => { f.carbon = { restricts_carbon_credits: "yes", evidence: "no credits" }; } },
 ];
 
@@ -180,6 +205,24 @@ console.log("\n──────── summary wording ────────
   const unclear = run((f) => { f.sector.covers_clean_cooking = "unclear"; });
   check(unclear.verdict === "needs_review" && unclear.summary.includes("couldn't be confirmed from the call: sector"), "unclear criterion is named", `  (${unclear.summary})`);
   check(!/private profile|profile was not loaded/i.test([clean, closed, landing, unclear].map((r) => r.notes_text).join(" ")), "no wording about a profile not being loaded, anywhere");
+}
+
+// ── prize value rule ──
+{
+  const f = base(); f.funding = { instruments: ["prize"], min_award_usd: null, max_award_usd: 20000, evidence: "USD 20,000 prize" };
+  const rep = buildReport(normalizeFacts(f), meta, undefined, NOW);
+  check(rep.passed.some((r) => r.id === "S2" && r.detail.includes("$20k") && r.detail.includes("visibility of winning")), "prize-only: S2 passes with the prize value and the visibility note");
+}
+
+// ── award-aware prompt ──
+console.log("\n──────── award prompt ────────");
+{
+  const ctx = { today: "2026-10-01", trackerContext: "", coverageHint: "h", sourceNotes: [] as string[] };
+  const grantPrompt = buildUserPrompt(ctx);
+  const awardPrompt = buildUserPrompt({ ...ctx, kind: "award" });
+  check(!grantPrompt.includes("AWARD / PRIZE") && grantPrompt === buildUserPrompt({ ...ctx, kind: "grant" }), "grant prompt is unchanged");
+  check(awardPrompt.includes("AWARD / PRIZE / COMPETITION") && awardPrompt.includes('["prize"]') && awardPrompt.includes("ENTRY / NOMINATION deadline") && awardPrompt.includes("BROAD"), "award prompt explains prize, entry deadline and broad-sector handling");
+  check(awardPrompt.indexOf("AWARD / PRIZE") < awardPrompt.indexOf("Extract the call facts"), "award note comes before the extraction instruction");
 }
 
 console.log("\n──────── sample notes: consortium + stacking + tight deadline ────────");

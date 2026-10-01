@@ -43,6 +43,10 @@ export interface CallFacts {
   rfp_url: string | null;
   source_coverage: "full_rfp" | "partial" | "landing_page_only";
   extraction_confidence: number; // 0..1
+  // Set by the route from the grant record (NOT by Gemini) when the opportunity
+  // is an award / prize / competition — rules.ts treats a deadline that has
+  // only just passed more gently for those (award deadlines are often extended).
+  is_award?: boolean;
 
   deadline: {
     date: string | null; // ISO yyyy-mm-dd, next application deadline

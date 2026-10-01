@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { TRACKER_STATUSES, TrackerItem, TrackerStatus } from "@/lib/types";
+import { ActionItem, Grant, OpportunityNote, TRACKER_STATUSES, TrackerItem, TrackerStatus } from "@/lib/types";
+import OpportunityBreakdown, { ActionRow } from "@/components/OpportunityBreakdown";
+import { LEADS, canonicalLead, categoryLabel, dueState, effectiveFields, myOpenActions, statusLabel } from "@/lib/pipeline";
 
 const STATUS_LABELS: Record<TrackerStatus, string> = {
   tracking: "Tracking",
@@ -20,6 +22,38 @@ const IN_PROGRESS_STATUSES: TrackerStatus[] = ["tracking", "researching", "draft
 
 type StatusFilter = TrackerStatus | "all" | "in_progress";
 
+// "Viewing as" is remembered per browser (no logins in this app). Read through
+// useSyncExternalStore so the server render (no browser storage) and the
+// browser agree, and other tabs pick up a change.
+const VIEWER_KEY = "grant-intelligence.viewer";
+const VIEWER_EVENT = "grant-intelligence-viewer";
+let viewerFallback: string | null = null; // used when browser storage is blocked
+function readViewer(): string | null {
+  try {
+    return canonicalLead(window.localStorage.getItem(VIEWER_KEY)) ?? viewerFallback;
+  } catch {
+    return viewerFallback;
+  }
+}
+function writeViewer(value: string | null) {
+  viewerFallback = value;
+  try {
+    if (value) window.localStorage.setItem(VIEWER_KEY, value);
+    else window.localStorage.removeItem(VIEWER_KEY);
+  } catch {
+    // private browsing etc. — kept for this visit only
+  }
+  window.dispatchEvent(new Event(VIEWER_EVENT));
+}
+function subscribeViewer(cb: () => void) {
+  window.addEventListener("storage", cb);
+  window.addEventListener(VIEWER_EVENT, cb);
+  return () => {
+    window.removeEventListener("storage", cb);
+    window.removeEventListener(VIEWER_EVENT, cb);
+  };
+}
+
 function formatMoney(amount: number, currency?: string | null) {
   return `${currency ?? "USD"} ${amount.toLocaleString()}`;
 }
@@ -36,10 +70,57 @@ export default function ApplicationTracker() {
   const [manualAmount, setManualAmount] = useState("");
   const [manualSource, setManualSource] = useState("");
   const [manualNotes, setManualNotes] = useState("");
+  // Breakdown panel, meeting notes and action points (Opportunity Pipeline, 2026-10-01).
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [notes, setNotes] = useState<OpportunityNote[]>([]);
+  const [actions, setActions] = useState<ActionItem[]>([]);
+  const [notesError, setNotesError] = useState<string | null>(null);
+  const viewer = useSyncExternalStore(subscribeViewer, readViewer, () => null);
+  const [showMine, setShowMine] = useState(false);
 
   useEffect(() => {
     loadData();
+    loadNotesAndActions();
   }, []);
+
+  async function loadNotesAndActions() {
+    const [n, a] = await Promise.all([
+      supabase.from("opportunity_notes").select("*").order("meeting_date", { ascending: false }),
+      supabase.from("action_items").select("*").order("created_at", { ascending: true }),
+    ]);
+    const err = n.error ?? a.error;
+    setNotesError(
+      err
+        ? "Meeting notes and action points aren't available yet — run supabase/opportunity_pipeline_migration_2026-10-01.sql in Supabase."
+        : null
+    );
+    setNotes((n.data as OpportunityNote[]) ?? []);
+    setActions((a.data as ActionItem[]) ?? []);
+  }
+
+  const chooseViewer = (name: string) => writeViewer(name || null);
+
+  const mine = useMemo(() => myOpenActions(actions, viewer), [actions, viewer]);
+  const mineOverdue = mine.filter((a) => dueState(a) === "overdue").length;
+
+  async function toggleActionDone(a: ActionItem) {
+    const patch = { done: !a.done, done_at: !a.done ? new Date().toISOString() : null };
+    const { error: e } = await supabase.from("action_items").update(patch).eq("id", a.id);
+    if (e) return setNotesError(e.message);
+    setActions((prev) => prev.map((x) => (x.id === a.id ? { ...x, ...patch } : x)));
+  }
+
+  function openOpportunity(trackerItemId: string) {
+    setStatusFilter("all");
+    setExpandedId(trackerItemId);
+    setShowMine(false);
+    setTimeout(() => document.getElementById(`opp-${trackerItemId}`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  }
+
+  const patchItem = (id: string, patch: Partial<TrackerItem>) =>
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)));
+  const patchGrant = (id: string, patch: Partial<Grant>) =>
+    setItems((prev) => prev.map((i) => (i.id === id && i.grant ? { ...i, grant: { ...i.grant, ...patch } } : i)));
 
   async function loadData() {
     setLoading(true);
@@ -198,8 +279,60 @@ export default function ApplicationTracker() {
     loadData();
   }
 
+  const titleOf = (id: string) => {
+    const it = items.find((i) => i.id === id);
+    return it ? effectiveFields(it).programName || "(untitled grant)" : "(removed opportunity)";
+  };
+
   return (
     <div className="flex flex-col gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white px-4 py-3">
+        <label className="flex items-center gap-2 text-sm text-neutral-600">
+          Viewing as
+          <select value={viewer ?? ""} onChange={(e) => chooseViewer(e.target.value)} className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-neutral-800">
+            <option value="">Choose your name…</option>
+            {LEADS.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+        {viewer && (
+          <button
+            onClick={() => setShowMine(!showMine)}
+            className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium ${
+              mineOverdue ? "bg-red-100 text-red-700" : mine.length ? "bg-orange-100 text-orange-700" : "bg-emerald-50 text-emerald-700"
+            }`}
+          >
+            🔔 {mine.length ? `${mine.length} open action point${mine.length > 1 ? "s" : ""}${mineOverdue ? ` · ${mineOverdue} overdue` : ""}` : "No open action points"}
+            {mine.length > 0 && <span>{showMine ? "▴" : "▾"}</span>}
+          </button>
+        )}
+      </div>
+
+      {viewer && showMine && mine.length > 0 && (
+        <div className="rounded-lg border border-orange-200 bg-orange-50 p-4">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+            My action points — {viewer}
+          </p>
+          <ul className="flex flex-col gap-2">
+            {mine.map((a) => (
+              <div key={a.id} className="flex flex-wrap items-center justify-between gap-2">
+                <ActionRow a={a} opportunity={titleOf(a.tracker_item_id)} onToggle={toggleActionDone} showOpportunity />
+                <button onClick={() => openOpportunity(a.tracker_item_id)} className="text-xs font-medium text-[var(--accent)] hover:underline">
+                  Open →
+                </button>
+              </div>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {notesError && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{notesError}</div>
+      )}
+
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         <StatTile
           label="Total tracked"
@@ -352,11 +485,13 @@ export default function ApplicationTracker() {
             .filter(Boolean)
             .join(" · ");
 
+          const expanded = expandedId === item.id;
+          const chips = [categoryLabel(item.pipeline_category), statusLabel(item.pipeline_status), canonicalLead(item.owner)].filter(Boolean);
+          const openCount = actions.filter((a) => a.tracker_item_id === item.id && !a.done).length;
+
           return (
-            <div
-              key={item.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white p-4"
-            >
+            <div key={item.id} id={`opp-${item.id}`} className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 {item.grant?.application_url ? (
                   <a
@@ -374,18 +509,55 @@ export default function ApplicationTracker() {
                 )}
                 {details && <p className="text-sm text-neutral-500">{details}</p>}
                 {item.notes && <p className="mt-1 text-sm italic text-neutral-500">{item.notes}</p>}
+                {(chips.length > 0 || openCount > 0) && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {chips.map((c) => (
+                      <span key={c} className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-600">
+                        {c}
+                      </span>
+                    ))}
+                    {openCount > 0 && (
+                      <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-medium text-orange-700">
+                        {openCount} open action point{openCount > 1 ? "s" : ""}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
-              <select
-                value={item.status}
-                onChange={(e) => updateStatus(item.id, e.target.value as TrackerStatus)}
-                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
-              >
-                {TRACKER_STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {STATUS_LABELS[status]}
-                  </option>
-                ))}
-              </select>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setExpandedId(expanded ? null : item.id)}
+                  className={`rounded-md border px-3 py-1.5 text-sm font-medium ${
+                    expanded ? "border-[var(--accent)] bg-orange-50 text-[var(--accent)]" : "border-neutral-300 text-neutral-700 hover:bg-neutral-50"
+                  }`}
+                >
+                  Breakdown {expanded ? "▴" : "▾"}
+                </button>
+                <select
+                  value={item.status}
+                  onChange={(e) => updateStatus(item.id, e.target.value as TrackerStatus)}
+                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                >
+                  {TRACKER_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {STATUS_LABELS[status]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            {expanded && (
+              <OpportunityBreakdown
+                item={item}
+                viewer={viewer}
+                notes={notes.filter((n) => n.tracker_item_id === item.id)}
+                actions={actions.filter((a) => a.tracker_item_id === item.id)}
+                onItemChange={(patch) => patchItem(item.id, patch)}
+                onGrantChange={(patch) => patchGrant(item.id, patch)}
+                onNotesChange={setNotes}
+                onActionsChange={setActions}
+              />
+            )}
             </div>
           );
         })}

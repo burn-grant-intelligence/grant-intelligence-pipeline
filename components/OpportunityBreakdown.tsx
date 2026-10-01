@@ -138,18 +138,39 @@ export default function OpportunityBreakdown({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ trackerItemId: item.id }),
       });
-      const json = await res.json();
+      // Read as text first: when the server crashes, times out or the route is
+      // missing, the reply is an HTML/plain-text page, not JSON.
+      const raw = await res.text();
+      let json: { error?: string; tracker?: unknown; grant?: Record<string, unknown>; filled?: string[] } | null = null;
+      try {
+        json = JSON.parse(raw);
+      } catch {
+        json = null;
+      }
+      if (!json) {
+        const snippet = raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+        if (res.status === 404) {
+          setError("The server has no /api/opportunity-autofill route yet (HTTP 404). Check that app/api/opportunity-autofill/route.ts is on GitHub and that the latest Vercel deployment finished successfully.");
+        } else if (res.status === 504 || res.status === 408 || /TIMEOUT/i.test(raw)) {
+          setError(`The request timed out on the server (HTTP ${res.status}) — reading the page and asking Gemini took too long. Try again, or check the Vercel function logs for /api/opportunity-autofill.`);
+        } else if (res.status === 401 || res.status === 403) {
+          setError(`The server refused the request (HTTP ${res.status}). If Vercel Deployment Protection is on, the API route needs the same access as the rest of the site.`);
+        } else {
+          setError(`The server returned an unexpected reply (HTTP ${res.status})${snippet ? `: "${snippet}"` : ""}. Check the Vercel function logs for /api/opportunity-autofill.`);
+        }
+        return;
+      }
       if (!res.ok) {
-        setError(json.error ?? "Gemini could not fill this in.");
+        setError(json.error ?? `Gemini could not fill this in (HTTP ${res.status}).`);
         return;
       }
       onItemChange(json.tracker as ItemPatch);
       if (json.grant && Object.keys(json.grant).length) onGrantChange(json.grant);
       setVersion((v) => v + 1);
-      const n = (json.filled as string[]).length;
+      const n = (json.filled ?? []).length;
       setFillMessage(n ? `Filled ${n} empty field${n > 1 ? "s" : ""}. Nothing you typed was changed.` : "Nothing new to fill — the empty fields weren't stated on the page.");
-    } catch {
-      setError("Could not reach Gemini. Is the app deployed with GEMINI_API_KEY set?");
+    } catch (err) {
+      setError(`Could not reach the app's server${err instanceof Error && err.message ? ` (${err.message})` : ""}. Check your internet connection and that the site is deployed, then try again.`);
     } finally {
       setFilling(false);
     }

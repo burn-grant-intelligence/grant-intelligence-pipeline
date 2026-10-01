@@ -105,6 +105,13 @@ const withNote = (s: string) => (s ? ` (${s})` : "");
 
 // ───────────────────────── the rules ─────────────────────────
 
+// An award whose entry deadline passed within this many days is sent for review
+// instead of failed, unless the call says in so many words that it is closed:
+// award deadlines are often extended. Keep in step with AWARD_GRACE_DAYS in
+// scripts/gemini_discover.py and components/GrantScanner.tsx.
+const AWARD_GRACE_DAYS = 7;
+const SAYS_CLOSED = /\b(closed|no longer (accept|open)|has ended|have ended|applications? (is|are) closed|geschlossen|beendet|clôtur)/i;
+
 // "2026-09-25" -> "25 Sep 2026" (falls back to the raw text if it isn't a date).
 export function fmtDate(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
@@ -123,7 +130,13 @@ export function evaluateRules(f: CallFacts, P: Profile = BURN_PROFILE, now = new
     const d = f.deadline;
     const parsed = d.date ? new Date(`${d.date}T23:59:59Z`) : null;
     const days = parsed && !isNaN(+parsed) ? Math.ceil((+parsed - +now) / 86_400_000) : null;
+    // An award whose deadline has only just passed, with nothing in the call saying it is closed.
+    const pastBy = parsed && !isNaN(+parsed) && +parsed < +now ? Math.max(1, Math.ceil((+now - +parsed) / 86_400_000)) : 0;
+    const isAward = f.is_award === true || (f.funding.instruments.length > 0 && f.funding.instruments.every((i) => i === "prize"));
+    const lapsedAward = isAward && !d.is_rolling && pastBy > 0 && pastBy <= AWARD_GRACE_DAYS && !(d.evidence && SAYS_CLOSED.test(d.evidence));
     if (d.is_rolling) rules.push(mk("H1", "Deadline", "hard", "pass", "Rolling / open-ended call.", d.evidence));
+    else if (lapsedAward)
+      rules.push(mk("H1", "Deadline", "hard", "unclear", `The entry deadline (${fmtDate(d.date as string)}) passed ${pastBy} day${pastBy === 1 ? "" : "s"} ago, but the page doesn't say entries are closed. Award deadlines are often extended — confirm with the organiser before investing time.`, d.evidence));
     else if (d.status === "closed" || (days !== null && days < 0))
       rules.push(mk("H1", "Deadline", "hard", "fail", d.date ? `The call closed on ${fmtDate(d.date)}, so the deadline has already passed.` : "The call is marked as closed.", d.evidence));
     else if (days !== null) rules.push(mk("H1", "Deadline", "hard", "pass", `Open — ${days} day(s) left (${d.date}).`, d.evidence));
@@ -274,7 +287,12 @@ export function evaluateRules(f: CallFacts, P: Profile = BURN_PROFILE, now = new
   // S2 — award size --------------------------------------------------------
   {
     const { min_award_usd: lo, max_award_usd: hi } = f.funding;
-    if (hi !== null && hi < P.minWorthwhileAwardUsd)
+    // A prize-only competition is entered for visibility and credibility as
+    // much as for the money, so BURN's grant effort threshold doesn't apply.
+    const prizeOnly = f.funding.instruments.length > 0 && f.funding.instruments.every((i) => i === "prize");
+    if (prizeOnly) {
+      if (hi !== null) rules.push(mk("S2", "Prize value", "soft", "pass", `Cash prize of up to ${money(hi)}, plus the visibility of winning.`, f.funding.evidence));
+    } else if (hi !== null && hi < P.minWorthwhileAwardUsd)
       rules.push(mk("S2", "Award size", "soft", "warn", `Max award ${money(hi)} is below BURN's ${money(P.minWorthwhileAwardUsd)} effort threshold.`, f.funding.evidence));
     else if (lo !== null && lo > P.maxRealisticAskUsd)
       rules.push(mk("S2", "Award size", "soft", "warn", `Minimum award ${money(lo)} exceeds BURN's demonstrated range (max ask ${money(P.maxRealisticAskUsd)}).`, f.funding.evidence));

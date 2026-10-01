@@ -20,7 +20,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -65,6 +65,11 @@ MAX_AWARDS_PER_RUN = 30
 # Added to every award's focus_areas so the Grant Scanner's "Awards & prizes"
 # filter (components/GrantScanner.tsx) can find them without a new column.
 AWARD_TAG = "awards & prizes"
+# An award whose entry deadline passed up to this many days ago is still saved
+# (flagged "deadline passed — check for an extension") IF its page still shows
+# it open: award deadlines are often extended, and a one-day miss would
+# otherwise hide a live call. Grants and events keep the strict rule.
+AWARD_GRACE_DAYS = 7
 CASH_PRIZE_FUNDING_TYPE = "Cash prize award"  # must match FUNDING_TYPES in lib/pipeline.ts
 
 GEMINI_MAX_RETRIES = 3
@@ -144,6 +149,7 @@ _PROMPT_VALUES = {
     "max_items_per_opportunity_page": MAX_ITEMS_PER_OPPORTUNITY_PAGE,
     "max_events_per_page": MAX_EVENTS_PER_PAGE,
     "max_awards_per_theme": MAX_AWARDS_PER_THEME,
+    "award_grace_days": AWARD_GRACE_DAYS,
     "core_topics": "\n".join(f"- {topic}" for topic in CORE_EVENT_TOPICS),
     "primary_topics": "\n".join(f"- {topic}" for topic in PRIMARY_EVENT_TOPICS),
     "secondary_topics": "\n".join(f"- {topic}" for topic in SECONDARY_EVENT_TOPICS),
@@ -532,7 +538,7 @@ def _remember_event(title: str, start_date) -> None:
     _seen_event_signatures.append((_title_tokens(title), _parse_date(start_date), title))
 
 
-def save_opportunity(fields: dict, candidate: dict, extra: dict | None = None, label: str = "opportunity") -> bool:
+def save_opportunity(fields: dict, candidate: dict, extra: dict | None = None, label: str = "opportunity", grace_days: int = 0) -> bool:
     """Upsert one extracted opportunity into `grants`, tagged source_type
     'gemini' so the Grant Scanner shows a green pill on it. `extra` adds more
     columns (awards use it for type_of_funding); None values in it are left
@@ -554,7 +560,7 @@ def save_opportunity(fields: dict, candidate: dict, extra: dict | None = None, l
     deadline_raw = fields.get("deadline")
     if deadline_raw:
         try:
-            if datetime.strptime(str(deadline_raw), "%Y-%m-%d").date() < TODAY:
+            if datetime.strptime(str(deadline_raw), "%Y-%m-%d").date() < TODAY - timedelta(days=grace_days):
                 print(f"    - skipped (deadline {deadline_raw} has already passed)")
                 return False
         except ValueError:
@@ -969,17 +975,25 @@ def award_to_grant_fields(fields: dict) -> tuple[dict, dict]:
     who = _clean_text(fields.get("eligibility"), 500)
     eligibility = (f"{who} — " if who else "") + " · ".join(details)
 
+    deadline = fields.get("deadline") if _parse_date(fields.get("deadline")) else None
+    fit = _clean_text(fields.get("fit_analysis"), 1200)
+    if deadline and _parse_date(deadline) < TODAY:
+        # Inside the grace window (save_opportunity drops anything older): say
+        # so at the top of the card, where it can't be missed.
+        warning = f"⚠ Entry deadline passed on {deadline}, but the award page still shows entries open — confirm with the organiser whether it was extended before investing time."
+        fit = f"{warning} {fit}" if fit else warning
+
     grant_fields = {
         "title": _clean_text(fields.get("title"), 200),
         "funder": _clean_text(fields.get("organizer"), 200),
         "amount": amount,
         "currency": _clean_text(fields.get("currency"), 10) if amount is not None else None,
-        "deadline": fields.get("deadline") if _parse_date(fields.get("deadline")) else None,
+        "deadline": deadline,
         "geography": _clean_text(fields.get("geography"), 200),
         "focus_areas": focus,
         "eligibility": eligibility,
         "description": _clean_text(fields.get("description"), 800),
-        "fit_analysis": _clean_text(fields.get("fit_analysis"), 1200),
+        "fit_analysis": fit,
         "application_url": fields.get("application_url")
         if isinstance(fields.get("application_url"), str) and fields["application_url"].startswith("http")
         else None,
@@ -1044,7 +1058,7 @@ def save_award(fields: dict, candidate: dict) -> bool:
         print(f"    - skipped (a winners/finalists announcement, not an open award): {title}")
         return False
     grant_fields, extra = award_to_grant_fields(fields)
-    return save_opportunity(grant_fields, candidate, extra=extra, label="award")
+    return save_opportunity(grant_fields, candidate, extra=extra, label="award", grace_days=AWARD_GRACE_DAYS)
 
 
 def run_awards() -> None:

@@ -27,7 +27,9 @@ jobs:
     # leaving the job free to run indefinitely. If real runs start timing out
     # here, that's the signal to trim MAX_EVENTS_PER_RUN (or the
     # event_sources list) back down rather than just raising this further.
-    timeout-minutes: 40
+    # 2026-10-02: +16 pages per run from config/funding_sources.yaml (the
+    # longlist, read in a rotating batch) — about 4 more minutes; 50 total.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
 
@@ -44,6 +46,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Pages read per run from config/funding_sources.yaml (rotating).
+          SOURCES_P1_PER_RUN: '10'
+          SOURCES_OTHER_PER_RUN: '6'
         run: python scripts/gemini_discover.py
 
       # Housekeeping after each run: delete events that ended over a week ago,

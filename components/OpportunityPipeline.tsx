@@ -120,7 +120,7 @@ export default function OpportunityPipeline({ items }: { items: TrackerItem[] })
         <table className="w-full min-w-[1400px] text-sm">
           <thead>
             <tr>
-              {["Category", "Lead", "Status", "Program / funder", "Type of funding", "Target country/ies", "Product type", "Ticket size", "Requested (USD)", "Deadline", "Submitted", "Link", "Actions"].map((h) => (
+              {["Category", "Lead", "Status", "Program / funder", "Type of funding", "Target country/ies", "Product type", "Ticket size", "Requested (USD)", "Deadline", "Submitted", "Link", "ClickUp", "Actions"].map((h) => (
                 <th key={h} className="whitespace-nowrap bg-[var(--accent)] px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-white">
                   {h}
                 </th>
@@ -160,6 +160,13 @@ export default function OpportunityPipeline({ items }: { items: TrackerItem[] })
                       </a>
                     ) : <Dash />}
                   </td>
+                  <td className="px-3 py-2">
+                    {i.clickup_url ? (
+                      <a href={i.clickup_url} target="_blank" rel="noopener noreferrer" onClick={(ev) => ev.stopPropagation()} className="text-[var(--accent)] underline">
+                        ClickUp ↗
+                      </a>
+                    ) : <Dash />}
+                  </td>
                   <td className="whitespace-nowrap px-3 py-2">
                     {open.length ? (
                       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${overdue ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700"}`}>
@@ -170,7 +177,7 @@ export default function OpportunityPipeline({ items }: { items: TrackerItem[] })
                 </tr>,
                 isOpen && (
                   <tr key={`${i.id}-detail`} className="border-t border-neutral-100 bg-neutral-50/70">
-                    <td colSpan={13} className="px-4 py-3">
+                    <td colSpan={14} className="px-4 py-3">
                       <div className="grid gap-4 lg:grid-cols-3">
                         <div className="lg:col-span-1">
                           <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">Description</p>

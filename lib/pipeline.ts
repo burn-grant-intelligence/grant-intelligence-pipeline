@@ -115,6 +115,23 @@ export function effectiveFields(item: TrackerItem) {
   };
 }
 
+// The ClickUp task or list link a person pasted for an opportunity. Accepts a
+// link with or without "https://"; web links only, so nothing odd is ever put
+// behind an "Open in ClickUp" button. Returns null for anything else.
+export function cleanClickUpUrl(raw: string | null | undefined): string | null {
+  const t = (raw ?? "").trim();
+  if (!t) return null;
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(t) ? t : `https://${t}`;
+  try {
+    const u = new URL(withScheme);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+    if (u.username || u.password || !u.hostname.includes(".")) return null;
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
 // "2026-09-23" -> "23 Sep 2026"
 export function fmtDate(iso: string | null | undefined): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso ?? "");
@@ -227,6 +244,7 @@ export const PIPELINE_COLUMNS: { header: string; width: number }[] = [
   { header: "Requested amount (USD)", width: 18 },
   { header: "Deadline", width: 14 },
   { header: "Link", width: 40 },
+  { header: "ClickUp", width: 40 },
   { header: "Submission date", width: 14 },
   { header: "Notes", width: 70 },
   { header: "Open action points", width: 50 },
@@ -254,6 +272,7 @@ export function pipelineRow(item: TrackerItem, notes: OpportunityNote[], actions
     "Requested amount (USD)": typeof item.requested_amount_usd === "number" ? item.requested_amount_usd : "",
     Deadline: fmtDate(e.deadline),
     Link: e.link,
+    ClickUp: item.clickup_url ?? "",
     "Submission date": fmtDate(item.submission_date),
     Notes: myNotes,
     "Open action points": open,

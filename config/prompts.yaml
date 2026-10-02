@@ -14,6 +14,7 @@
 #   {geography_priority}              numbered geography_priority list from config/company.yaml
 #   {fixed_opportunity_sources}       "- title: url" list from config/sources.yaml `sources`
 #   {fixed_event_sources}             "- Events listed on host: url" list from config/sources.yaml `event_sources`
+#   {funder_watchlist}                "- name" list: config/funding_sources.yaml funders_to_watch + source names
 #   {url}, {title}                    the candidate being read (the *_extraction prompts)
 #   {award_theme}                     one entry of config/sources.yaml `award_themes` (award_discovery only)
 #   {max_awards_per_theme}            MAX_AWARDS_PER_THEME (award_discovery only)
@@ -35,6 +36,17 @@ opportunity_discovery: |
   A genuine, currently open funding or procurement call — an RFP, EOI, "Call for Solutions", call for proposals, tender, results-based financing call, grant round,
   catalytic/concessional funding window, or similar — that provides money or a contract TO the company.
   NOT a news article about funding already awarded, NOT an event, NOT a general announcement with no open call or application route attached.
+
+  OPEN CALLS ONLY — NOT PROGRAMMES
+
+  An opportunity is something advertised that BURN can SUBMIT an application, proposal, bid or entry to right now:
+  a live call for proposals, RFP, EOI, tender, funding round, challenge or application window with a way to apply.
+  It is NOT:
+  - a programme, fund, facility or initiative that simply exists or is "ongoing" (e.g. a fund's "About" or "What we fund" page) when no call is currently open;
+  - a forthcoming / "coming soon" / "expected" round that is not yet accepting applications;
+  - a closed call, a past round, or a list of previously funded projects;
+  - a news story about a programme being launched, unless it states that applications are open now and how to apply.
+  If you cannot point to the open call itself (its page, deadline or "applications open" statement, and the route to apply), do not include it.
 
   Lean broad at this discovery stage — a detailed fit assessment happens later, per item, and a human reviews every opportunity before deciding whether to pursue it.
   When a topically-relevant opportunity's exact fit is unclear at this stage, include it rather than filtering it out now.
@@ -95,6 +107,16 @@ opportunity_discovery: |
   A global call can still qualify if African applicants or projects are eligible. It is especially relevant when it has a substantive Africa, emerging-market, clean-cooking,
   carbon-market, or energy-access focus.
 
+
+  FUNDERS TO WATCH
+
+  BURN has pursued, or wants to pursue, calls from the funders and platforms below — including ones that are NOT clean-cooking specific
+  (e.g. Solar Impulse Foundation, the Ngwee Ngwee Fund, Development Innovation Ventures, the Fund for Innovation in Development, EU programmes,
+  UNIDO, UNCDF, GIZ, NEFCO, TDB). Search for CURRENTLY OPEN calls from them that an energy, climate-tech, manufacturing, carbon or
+  job-creating company in Africa could apply to. The open-calls-only rule above applies: a funder being on this list is not a reason to include
+  a programme page with no open call.
+
+  {funder_watchlist}
 
   FIXED OPPORTUNITY SOURCES
 
@@ -194,7 +216,7 @@ opportunity_discovery: |
   (not open, not a real funding/procurement call, excluded category, or unverifiable).
 
   Before returning an opportunity, ask:
-  1. Is it genuinely open right now?
+  1. Is it genuinely open right now — an advertised call BURN could submit to today, not just an ongoing programme?
   2. Is the deadline or open status verified?
   3. Is it a real funding or procurement call that provides money or a contract to the applicant?
   4. Is it topically relevant to the CORE, PRIMARY, or SECONDARY relevance framework?
@@ -503,8 +525,18 @@ opportunity_extraction: |-
     "eligibility": string | null,
     "description": string | null,     // 1-2 sentence neutral summary of the opportunity itself
     "application_url": string | null, // the outbound link where you apply, if the page states one — otherwise use the URL you were given
-    "fit_analysis": string | null     // 2-4 sentences assessing how well THIS opportunity fits the company specifically
+    "fit_analysis": string | null,    // 2-4 sentences assessing how well THIS opportunity fits the company specifically
+    "call_status": "open" | "forthcoming" | "closed" | "ongoing_programme"
   }
+
+  Rules for "call_status" (required on every item):
+  - "open": an advertised call, RFP, EOI, tender, funding round, challenge or application window that is accepting applications today, with a way to apply
+    (a deadline not yet passed, or an explicit "applications open" / "rolling — apply now" statement).
+  - "forthcoming": announced but not yet accepting applications ("opens in", "coming soon", "expected", "pre-announcement", "forecast").
+  - "closed": the deadline has passed, or the page says closed, awarded or suspended.
+  - "ongoing_programme": a programme, fund, facility or initiative page that describes what it funds but shows no currently open call.
+  Only "open" items are saved; prefer returning { "grants": [] } over extracting anything that is not "open". Never mark an item "open"
+  just because the programme exists or the funder is active.
 
   Rules for "fit_analysis":
   - Write it as an analyst briefing the company's grants team, not marketing copy.
@@ -515,6 +547,7 @@ opportunity_extraction: |-
   A human reviews every opportunity you extract in the Grant Scanner before deciding whether to pursue it, and can discard anything irrelevant with one click. So lean toward EXTRACTING a genuine, open, on-topic funding/procurement opportunity even when: the company-fit looks partial, uncertain, or even like a real mismatch (e.g. it needs an accredited intermediary, targets a different tier of operator, or only partially overlaps the profile's geography or focus) — note that plainly in fit_analysis instead of returning nothing; or some secondary field (amount, exact deadline, eligibility) is thin or unstated — use null for that field rather than skipping the whole item. Only return { "grants": [] } for one of the specific structural reasons listed below, never merely because fit looks weak or details are incomplete.
 
   Return { "grants": [] } — i.e. extract nothing — if the page is:
+  - A programme, fund or facility page with no call currently open for applications, or a forthcoming round not yet accepting applications.
   - Announcing that someone has ALREADY won, received or been awarded funding.
   - A recap of an event, conference, webinar or partnership, even if funding is mentioned.
   - A job vacancy for a permanent or fixed-term STAFF employee, rather than a competitively tendered consultancy.

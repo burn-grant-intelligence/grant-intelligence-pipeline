@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { FOCUS_AREAS, Grant } from "@/lib/types";
+import { AWARD_TAG, KIND_BADGE, isAward, kindOf, normalizeTag } from "@/lib/opportunityType";
+import { compareTitles } from "@/lib/titleSimilarity";
 
 const MIN_VALUE_OPTIONS = [
   { label: "Any amount", value: 0 },
@@ -15,31 +17,20 @@ const MIN_VALUE_OPTIONS = [
 
 const GEOGRAPHY_OPTIONS = ["Any geography", "Africa-focused", "Global", "East Africa", "Kenya"];
 
-// Awards & prizes are saved by `scripts/gemini_discover.py --awards` into the
-// same grants table, tagged with this focus area (and type_of_funding
-// "Cash prize award" when there is a cash prize).
-const AWARD_TAG = "awards & prizes";
+// Awards & prizes vs grants: see lib/opportunityType.ts.
 // Keep in step with AWARD_GRACE_DAYS in scripts/gemini_discover.py: an award
 // whose entry deadline passed within this many days stays visible, flagged,
 // because award deadlines are often extended.
 const AWARD_GRACE_DAYS = 7;
 const TYPE_OPTIONS = [
   { label: "All opportunities", value: "all" },
-  { label: "Grants & calls", value: "grants" },
+  { label: "💰 Grants & calls", value: "grants" },
   { label: "🏆 Awards & prizes", value: "awards" },
 ] as const;
 type TypeFilter = (typeof TYPE_OPTIONS)[number]["value"];
 
-function normalizeTag(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function isAward(grant: Grant) {
-  return (
-    grant.type_of_funding === "Cash prize award" ||
-    (grant.focus_areas ?? []).some((tag) => normalizeTag(tag) === normalizeTag(AWARD_TAG))
-  );
-}
+// Who is already tracking an opportunity (one tracker item per opportunity).
+type TrackedInfo = { owner: string | null; status: string };
 
 export default function GrantScanner() {
   const [grants, setGrants] = useState<Grant[]>([]);
@@ -51,7 +42,8 @@ export default function GrantScanner() {
   const [minValue, setMinValue] = useState(0);
   const [geography, setGeography] = useState(GEOGRAPHY_OPTIONS[0]);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
-  const [trackedIds, setTrackedIds] = useState<Set<string>>(new Set());
+  const [tracked, setTracked] = useState<Map<string, TrackedInfo>>(new Map());
+  const [trackingId, setTrackingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [discardingId, setDiscardingId] = useState<string | null>(null);
 
@@ -63,7 +55,7 @@ export default function GrantScanner() {
     setLoading(true);
     setError(null);
     try {
-      const [{ count }, { data, error: grantsError }] = await Promise.all([
+      const [{ count }, { data, error: grantsError }, trackedRes] = await Promise.all([
         supabase.from("sources").select("id", { count: "exact", head: true }).eq("active", true),
         supabase
           .from("grants")
@@ -71,8 +63,12 @@ export default function GrantScanner() {
           .order("relevance_score", { ascending: false, nullsFirst: false })
           .order("first_seen_at", { ascending: false })
           .limit(200),
+        supabase.from("tracker_items").select("grant_id, owner, status"),
       ]);
       if (grantsError) throw grantsError;
+      // Tracked state comes from the database, so everyone sees "Tracked ✓"
+      // on an opportunity someone else already tracked.
+      setTracked(new Map(((trackedRes.data ?? []) as { grant_id: string | null; owner: string | null; status: string }[]).filter((t) => t.grant_id).map((t) => [t.grant_id as string, { owner: t.owner, status: t.status }])));
       setSourceCount(count ?? 0);
       setGrants(data ?? []);
     } catch (err) {
@@ -157,22 +153,51 @@ export default function GrantScanner() {
 
     // Stable sort: priority first, then keep the order the query already gave
     // us (relevance score, then most recently seen).
-    return visible
+    const sorted = visible
       .map((grant, index) => ({ grant, index }))
       .sort((a, b) =>
         priorityOf(b.grant) - priorityOf(a.grant) || a.index - b.index
       )
       .map((entry) => entry.grant);
-  }, [grants, activeFocusAreas, minValue, geography, typeFilter]);
 
+    // Near-duplicates saved before the 75% title rule existed: show one card
+    // per opportunity (the tracked copy if there is one). The "Merge duplicate
+    // opportunities" action in GitHub hides the extra rows for good.
+    const kept: Grant[] = [];
+    let hidden = 0;
+    for (const g of sorted) {
+      const twin = kept.findIndex((k) => compareTitles(k.title, g.title).same);
+      if (twin === -1) kept.push(g);
+      else {
+        hidden++;
+        if (tracked.has(g.id) && !tracked.has(kept[twin].id)) kept[twin] = g;
+      }
+    }
+    return { list: kept, hidden };
+  }, [grants, activeFocusAreas, minValue, geography, typeFilter, tracked]);
+
+  // One tracker item per opportunity: check first (someone else may have
+  // tracked it since this page loaded), and the database also refuses a
+  // second one (supabase/track_once_migration_2026-10-02.sql).
   async function trackGrant(grant: Grant) {
+    setTrackingId(grant.id);
+    setError(null);
+    const { data: existing } = await supabase.from("tracker_items").select("grant_id, owner, status").eq("grant_id", grant.id).limit(1);
+    if (existing && existing.length) {
+      setTracked((prev) => new Map(prev).set(grant.id, { owner: existing[0].owner, status: existing[0].status }));
+      setTrackingId(null);
+      return;
+    }
     const { error: insertError } = await supabase.from("tracker_items").insert({
       grant_id: grant.id,
       status: "tracking",
     });
-    if (!insertError) {
-      setTrackedIds((prev) => new Set(prev).add(grant.id));
+    if (!insertError || insertError.code === "23505") {
+      setTracked((prev) => new Map(prev).set(grant.id, { owner: null, status: "tracking" }));
+    } else {
+      setError(insertError.message);
     }
+    setTrackingId(null);
   }
 
   async function discardGrant(grant: Grant) {
@@ -314,8 +339,9 @@ export default function GrantScanner() {
           {loading
             ? "Loading…"
             : typeFilter === "awards"
-              ? `${filteredGrants.length} open award${filteredGrants.length === 1 ? "" : "s"} & prize${filteredGrants.length === 1 ? "" : "s"}`
-              : `${filteredGrants.length} matching opportunit${filteredGrants.length === 1 ? "y" : "ies"}`}
+              ? `${filteredGrants.list.length} open award${filteredGrants.list.length === 1 ? "" : "s"} & prize${filteredGrants.list.length === 1 ? "" : "s"}`
+              : `${filteredGrants.list.length} matching opportunit${filteredGrants.list.length === 1 ? "y" : "ies"}`}
+          {!loading && filteredGrants.hidden > 0 && ` · ${filteredGrants.hidden} duplicate${filteredGrants.hidden === 1 ? "" : "s"} hidden`}
         </span>
       </div>
 
@@ -325,7 +351,7 @@ export default function GrantScanner() {
         </div>
       )}
 
-      {!loading && !error && filteredGrants.length === 0 && (
+      {!loading && !error && filteredGrants.list.length === 0 && (
         <div className="rounded-lg border border-dashed border-neutral-300 bg-[var(--surface)] p-10 text-center text-[var(--ink-muted)]">
           {typeFilter === "awards"
             ? "No open awards or prizes yet. They appear here after the \"Awards discovery\" run (GitHub → Actions), which searches twice a week."
@@ -334,7 +360,7 @@ export default function GrantScanner() {
       )}
 
       <div className="flex flex-col gap-4">
-        {filteredGrants.map((grant) => {
+        {filteredGrants.list.map((grant) => {
           const open = expandedId === grant.id;
           const award = isAward(grant);
           return (
@@ -353,11 +379,9 @@ export default function GrantScanner() {
                   </h3>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  {award && (
-                    <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
-                      🏆 Award
-                    </span>
-                  )}
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${KIND_BADGE[kindOf(grant)].className}`}>
+                    {KIND_BADGE[kindOf(grant)].label}
+                  </span>
                   {deadlineJustPassed(grant) && (
                     <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-700">
                       Deadline passed · check for extension
@@ -475,10 +499,15 @@ export default function GrantScanner() {
                         e.stopPropagation();
                         trackGrant(grant);
                       }}
-                      disabled={trackedIds.has(grant.id)}
+                      disabled={tracked.has(grant.id) || trackingId === grant.id}
+                      title={tracked.has(grant.id) ? "Already in the Application Tracker — each opportunity is tracked once" : undefined}
                       className="rounded-md border border-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:border-neutral-300 disabled:text-neutral-400"
                     >
-                      {trackedIds.has(grant.id) ? "Tracked ✓" : award ? "+ Track this award" : "+ Track this grant"}
+                      {tracked.has(grant.id)
+                        ? `Tracked ✓${tracked.get(grant.id)?.owner ? ` · ${tracked.get(grant.id)?.owner}` : ""}`
+                        : trackingId === grant.id
+                          ? "Tracking…"
+                          : award ? "+ Track this award" : "+ Track this grant"}
                     </button>
                   </div>
                 </div>

@@ -173,9 +173,103 @@ export interface TrackerItem {
   link_check_note?: string | null;
   link_checked_at?: string | null;
   submission_date?: string | null; // ISO date
+  // Draft Application stages (supabase/draft_stages_migration_2026-10-02.sql).
+  // null = not started, treated as "concept".
+  draft_stage?: DraftStage | null;
+  draft_stage_changed_at?: string | null;
+  draft_brief?: DraftBrief | null;
+  // Link to this opportunity's task or list in ClickUp (pasted by the team).
+  clickup_url?: string | null;
   created_at: string;
   updated_at: string;
   grant: Grant | null;
+}
+
+// ── Draft Application stages (lib/drafting.ts) ──
+export const DRAFT_STAGES = ["concept", "first_draft"] as const;
+export type DraftStage = (typeof DRAFT_STAGES)[number];
+
+// One question in the application form, with its limit.
+export interface DraftQuestion {
+  id: string;
+  label: string;
+  limit: number | null;
+  unit: "words" | "characters";
+  criterion?: string | null; // which scoring criterion it mainly serves
+}
+
+// What the donor wants, typed in or decoded from the call by Gemini.
+export interface DraftBrief {
+  objectives: string[];
+  criteria: { name: string; weight: string | null }[];
+  keywords: string[];
+  must_haves: string[]; // mandatory sections, attachments, formats, eligibility proofs
+  questions: DraftQuestion[];
+  decoded_at?: string | null;
+  source?: string | null; // where Gemini read it from
+}
+
+export type ReviewStatus = "pass" | "warn" | "fail";
+
+// The Gemini review of one stage's draft (draft_stage_work.review).
+export interface StageReview {
+  readiness: number; // 0-100: how ready this stage is to lift to the next
+  summary: string;
+  checks: { item: string; status: ReviewStatus; comment: string }[];
+  suggestions: { where: string; issue: string; suggestion: string }[];
+  criteria_coverage: { criterion: string; status: ReviewStatus; comment: string }[];
+  missing: string[];
+  next_steps: string[];
+  model?: string;
+}
+
+export interface DraftStageWork {
+  id: string;
+  tracker_item_id: string;
+  stage: DraftStage;
+  draft_text: string | null;
+  answers: Record<string, string>;
+  checklist: string[];
+  stage_notes: string | null;
+  review: StageReview | null;
+  reviewed_at: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DraftStageMove {
+  id: string;
+  tracker_item_id: string;
+  from_stage: DraftStage | null;
+  to_stage: DraftStage;
+  moved_by: string | null;
+  open_items: string[];
+  moved_at: string;
+}
+
+// Direction from the management team before the concept is written
+// (draft_guidance table): what they want, who said it and when.
+export interface DraftGuidance {
+  id: string;
+  tracker_item_id: string;
+  guidance_date: string; // ISO date
+  source: string | null; // e.g. "Management meeting", "Email from the CEO", "WhatsApp"
+  given_by: string | null;
+  text: string;
+  author: string | null; // who recorded it
+  created_at: string;
+}
+
+export interface DraftLearning {
+  id: string;
+  tracker_item_id: string | null;
+  stage: DraftStage | null;
+  funder: string | null;
+  lesson: string;
+  tags: string[];
+  author: string | null;
+  created_at: string;
 }
 
 export type PipelineCategory = "solicited" | "unsolicited" | "partnerships" | "award";
@@ -188,6 +282,7 @@ export interface OpportunityNote {
   meeting_date: string; // ISO date
   notes: string;
   author: string | null;
+  stage?: DraftStage | null; // set when written in the Draft Application workspace
   created_at: string;
   updated_at: string;
 }
@@ -206,6 +301,7 @@ export interface ActionItem {
   done: boolean;
   done_at: string | null;
   created_by: string | null;
+  stage?: DraftStage | null; // set when written in the Draft Application workspace
   created_at: string;
 }
 

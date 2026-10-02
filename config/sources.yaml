@@ -76,6 +76,8 @@ event_sources:
 award_sources:
   - title: "SDG Innovation Award (Senate of Economy + UNIDO)"
     url: "https://sdg-innovation.com/en/"
+  - title: "German SDG Award — application portal"
+    url: "https://bewerbung.sdg-innovation.com/"
   - title: "Ashden Awards"
     url: "https://ashden.org/awards/"
   - title: "Energy Globe Award"

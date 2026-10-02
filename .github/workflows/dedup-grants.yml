@@ -1,0 +1,37 @@
+name: Merge duplicate opportunities
+
+# Hides near-duplicate opportunities already in the Grant Scanner (~75% of the
+# title wording the same, e.g. "Call for Solutions Horizon Europe EU 2027" and
+# "EU 2027 Call for Solutions"). Keeps the tracked copy, or the first one seen,
+# and discards (hides, keeps the row) the rest. See scripts/dedup_grants.py.
+# Leave "apply" unticked for a dry run that only lists the groups.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply the changes (untick for a dry run that only lists them)"
+        type: boolean
+        default: false
+
+jobs:
+  dedup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install requests==2.32.3
+
+      - name: Merge duplicate opportunities
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        working-directory: scripts
+        run: python dedup_grants.py ${{ inputs.apply && '--apply' || '' }}

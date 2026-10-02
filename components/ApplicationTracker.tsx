@@ -525,6 +525,17 @@ export default function ApplicationTracker() {
                 )}
               </div>
               <div className="flex items-center gap-2">
+                {item.clickup_url && (
+                  <a
+                    href={item.clickup_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Open this opportunity in ClickUp"
+                    className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                  >
+                    ClickUp ↗
+                  </a>
+                )}
                 <button
                   onClick={() => setExpandedId(expanded ? null : item.id)}
                   className={`rounded-md border px-3 py-1.5 text-sm font-medium ${

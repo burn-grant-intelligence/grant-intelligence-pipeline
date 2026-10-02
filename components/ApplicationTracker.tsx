@@ -493,9 +493,9 @@ export default function ApplicationTracker() {
             <div key={item.id} id={`opp-${item.id}`} className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
-                {item.grant?.application_url ? (
+                {item.pipeline_link?.trim() || item.grant?.application_url ? (
                   <a
-                    href={item.grant.application_url}
+                    href={item.pipeline_link?.trim() || item.grant?.application_url || undefined}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="font-medium text-neutral-800 underline decoration-neutral-300 underline-offset-2 hover:text-[var(--accent)]"

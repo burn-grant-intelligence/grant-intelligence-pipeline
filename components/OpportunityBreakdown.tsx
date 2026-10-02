@@ -17,10 +17,14 @@ import { useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
   FUNDING_TYPES, LEADS, PIPELINE_CATEGORIES, PIPELINE_STATUSES, PRODUCT_TYPES, STATUS_GROUPS,
-  canonicalLead, dueState, effectiveFields, emailOf, fmtDate, meetingIcs, money, notesEmailLink, todayIso, trackerStatusFor,
+  canonicalLead, cleanClickUpUrl, dueState, effectiveFields, emailOf, fmtDate, meetingIcs, money, notesEmailLink, todayIso, trackerStatusFor,
   type DueState,
 } from "@/lib/pipeline";
-import type { ActionItem, Grant, OpportunityNote, PipelineStatusCode, TrackerItem } from "@/lib/types";
+import { normalizeStage } from "@/lib/drafting";
+import type { ActionItem, DraftStage, Grant, OpportunityNote, PipelineStatusCode, TrackerItem } from "@/lib/types";
+
+// Short stage names for the badges on notes written in the Draft Application workspace.
+const STAGE_BADGE: Record<DraftStage, string> = { concept: "💡 Concept", first_draft: "✍️ First draft" };
 
 type ItemPatch = Partial<TrackerItem>;
 
@@ -93,9 +97,11 @@ export default function OpportunityBreakdown({
     const { error: e } = await supabase.from("tracker_items").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", item.id);
     if (e) {
       setError(
-        /pipeline_|program_name|ticket_size|target_countries|product_types|submission_date|schema cache/i.test(e.message)
-          ? "The Opportunity Pipeline columns are missing — run supabase/opportunity_pipeline_migration_2026-10-01.sql in Supabase first."
-          : e.message
+        /clickup_url/i.test(e.message)
+          ? "The ClickUp link column is missing — run supabase/draft_stages_migration_2026-10-02.sql in Supabase first."
+          : /pipeline_|program_name|ticket_size|target_countries|product_types|submission_date|schema cache/i.test(e.message)
+            ? "The Opportunity Pipeline columns are missing — run supabase/opportunity_pipeline_migration_2026-10-01.sql in Supabase first."
+            : e.message
       );
       return false;
     }
@@ -286,6 +292,28 @@ export default function OpportunityBreakdown({
               </p>
             )}
           </Field>
+          <Field label="ClickUp" hint="Paste this opportunity's ClickUp task or list link. Shown as an “Open in ClickUp” button here and in Draft Application.">
+            <div className="flex items-center gap-2">
+              <input
+                key={k("clickup")}
+                type="url"
+                defaultValue={item.clickup_url ?? ""}
+                placeholder="https://app.clickup.com/t/…"
+                onBlur={(e) => {
+                  const raw = e.target.value;
+                  const clean = cleanClickUpUrl(raw);
+                  if (raw.trim() && !clean) return setError("That doesn't look like a web link — paste the ClickUp task or list URL (starting with https://).");
+                  if ((item.clickup_url ?? null) !== clean) save({ clickup_url: clean });
+                }}
+                className={`${inputCls} flex-1`}
+              />
+              {item.clickup_url && (
+                <a href={item.clickup_url} target="_blank" rel="noopener noreferrer" className="shrink-0 rounded-md border border-neutral-300 px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50">
+                  Open ↗
+                </a>
+              )}
+            </div>
+          </Field>
         </div>
 
         <Field label="Description">
@@ -331,7 +359,10 @@ export default function OpportunityBreakdown({
 type DraftAction = { kind: "task" | "meeting"; description: string; meeting_with: string; assignee: string; due_date: string };
 const emptyDraft = (viewer: string | null): DraftAction => ({ kind: "task", description: "", meeting_with: "", assignee: viewer ?? "", due_date: "" });
 
-function NotesSection({
+// Also used by the Draft Application workspace (components/DraftWorkspace.tsx)
+// with `stage`: new notes and action points are tagged with that stage, and
+// the list can be narrowed to it.
+export function NotesSection({
   item,
   opportunity,
   viewer,
@@ -340,6 +371,7 @@ function NotesSection({
   onNotesChange,
   onActionsChange,
   onError,
+  stage,
 }: {
   item: TrackerItem;
   opportunity: string;
@@ -349,20 +381,26 @@ function NotesSection({
   onNotesChange: (update: (prev: OpportunityNote[]) => OpportunityNote[]) => void;
   onActionsChange: (update: (prev: ActionItem[]) => ActionItem[]) => void;
   onError: (msg: string | null) => void;
+  stage?: DraftStage;
 }) {
   const [adding, setAdding] = useState(false);
+  const [onlyStage, setOnlyStage] = useState(true);
   const [meetingDate, setMeetingDate] = useState(todayIso());
   const [text, setText] = useState("");
   const [drafts, setDrafts] = useState<DraftAction[]>([]);
   const [saving, setSaving] = useState(false);
   const [quick, setQuick] = useState<DraftAction | null>(null);
 
-  const sortedNotes = [...notes].sort((a, b) => b.meeting_date.localeCompare(a.meeting_date) || b.created_at.localeCompare(a.created_at));
-  const looseActions = actions.filter((a) => !a.note_id || !notes.some((n) => n.id === a.note_id));
+  const narrow = !!stage && onlyStage;
+  const shownNotes = narrow ? notes.filter((n) => n.stage && normalizeStage(n.stage) === stage) : notes;
+  const sortedNotes = [...shownNotes].sort((a, b) => b.meeting_date.localeCompare(a.meeting_date) || b.created_at.localeCompare(a.created_at));
+  const looseActions = actions.filter((a) => (!a.note_id || !notes.some((n) => n.id === a.note_id)) && (!narrow || (a.stage && normalizeStage(a.stage) === stage)));
   const missingTables = (m: string) =>
     /opportunity_notes|action_items|schema cache|does not exist|permission denied/i.test(m)
       ? "The notes tables are missing or locked — run supabase/opportunity_pipeline_migration_2026-10-01.sql in Supabase first."
-      : m;
+      : stage && /stage/i.test(m)
+        ? "The notes can't be tagged with a stage yet — run supabase/draft_stages_migration_2026-10-02.sql in Supabase first."
+        : m;
 
   const toRow = (d: DraftAction, noteId: string | null) => ({
     tracker_item_id: item.id,
@@ -373,6 +411,7 @@ function NotesSection({
     assignee: d.assignee || null,
     due_date: d.due_date || null,
     created_by: viewer,
+    ...(stage ? { stage } : {}),
   });
 
   async function saveNote() {
@@ -381,7 +420,7 @@ function NotesSection({
     onError(null);
     const { data: note, error } = await supabase
       .from("opportunity_notes")
-      .insert({ tracker_item_id: item.id, meeting_date: meetingDate, notes: text.trim(), author: viewer })
+      .insert({ tracker_item_id: item.id, meeting_date: meetingDate, notes: text.trim(), author: viewer, ...(stage ? { stage } : {}) })
       .select()
       .single();
     if (error || !note) {
@@ -436,7 +475,17 @@ function NotesSection({
     <section className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Meeting notes &amp; action points</h4>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {stage && (
+            <div className="flex overflow-hidden rounded-md border border-neutral-200 text-xs">
+              <button onClick={() => setOnlyStage(true)} className={`px-2.5 py-1.5 ${onlyStage ? "bg-neutral-900 text-white" : "text-neutral-600 hover:bg-neutral-50"}`}>
+                This stage
+              </button>
+              <button onClick={() => setOnlyStage(false)} className={`px-2.5 py-1.5 ${!onlyStage ? "bg-neutral-900 text-white" : "text-neutral-600 hover:bg-neutral-50"}`}>
+                All stages
+              </button>
+            </div>
+          )}
           <button onClick={() => setQuick(quick ? null : emptyDraft(viewer))} className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50">
             + Action point
           </button>
@@ -493,7 +542,7 @@ function NotesSection({
       )}
 
       {sortedNotes.length === 0 && looseActions.length === 0 && !adding && !quick && (
-        <p className="text-sm text-neutral-400">No meeting notes yet.</p>
+        <p className="text-sm text-neutral-400">{narrow ? "No meeting notes at this stage yet." : "No meeting notes yet."}</p>
       )}
 
       {sortedNotes.map((n) => {
@@ -504,6 +553,7 @@ function NotesSection({
               <p className="text-sm font-semibold text-neutral-800">
                 {fmtDate(n.meeting_date)}
                 {n.author && <span className="ml-2 text-xs font-normal text-neutral-400">by {n.author}</span>}
+                {n.stage && <span className="ml-2 rounded-full bg-orange-50 px-2 py-0.5 text-[11px] font-medium text-[var(--accent)]">{STAGE_BADGE[normalizeStage(n.stage)]}</span>}
               </p>
               <div className="flex items-center gap-3 text-xs">
                 <a href={notesEmailLink({ opportunity, note: n, actions: noteActions })} className="font-medium text-[var(--accent)] hover:underline" title="Opens your mail app with the notes and action points, addressed to the people responsible">

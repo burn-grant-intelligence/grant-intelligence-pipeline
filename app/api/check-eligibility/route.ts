@@ -42,6 +42,8 @@ import type { SupportingDoc } from "@/lib/types";
 import { FACTS_SCHEMA, SYSTEM_PROMPT, buildUserPrompt, normalizeFacts, schemaToTemplate } from "@/lib/eligibility/extract";
 import { gatherSources, isSafeUrl, maxCoverage, type GatheredSources } from "@/lib/eligibility/fetchSources";
 import { assessLink, findLinkPrompt, isGroundingRedirect, parseFoundLink } from "@/lib/eligibility/linkCheck";
+import { chooseCallLink, pinnedLinkFrom, type CallLinkChoice } from "@/lib/eligibility/callLink";
+import { pastedSources } from "@/lib/eligibility/pastedText";
 import { buildReport } from "@/lib/eligibility/rules";
 import { loadProfile, type ProfileDb } from "@/lib/eligibility/profileStore";
 import { planTrackerUpdate, type TrackerFitRow } from "@/lib/eligibility/applyVerdict";
@@ -54,6 +56,9 @@ export const runtime = "nodejs";
 // to the tools path is skipped when there isn't time left for it).
 export const maxDuration = 60;
 const MIN_MS_FOR_FALLBACK = 32_000;
+// Tool fallback: each attempt but the last is capped, and no further attempt starts after the limit.
+const TOOL_ATTEMPT_CAP_MS = 22_000;
+const TOOL_RETRY_LIMIT_MS = 44_000;
 
 // Default matches scripts/gemini_discover.py's GEMINI_MODEL — never
 // live-verified against a real API call in this build sandbox (no API key
@@ -103,7 +108,7 @@ function trackerContextFor(grant: GrantRow) {
 const SHAPE = `Return ONLY a JSON object (no prose, no markdown code fences) with exactly this shape. Pipes separate the allowed values of a field; "string|null" means a string or null:
 ${JSON.stringify(schemaToTemplate(FACTS_SCHEMA), null, 1)}`;
 
-function buildPrompt(mode: Mode, grant: GrantRow, gathered: GatheredSources | null) {
+function buildPrompt(mode: Mode, grant: GrantRow, gathered: GatheredSources | null, choice: CallLinkChoice) {
   const head = buildUserPrompt({
     today: new Date().toISOString().slice(0, 10),
     trackerContext: trackerContextFor(grant),
@@ -116,7 +121,7 @@ function buildPrompt(mode: Mode, grant: GrantRow, gathered: GatheredSources | nu
   });
   const about = `Opportunity: "${grant.title ?? "(untitled grant)"}"
 Funder: ${grant.funder ?? "an unnamed funder"}
-URL: ${grant.application_url}`;
+URL: ${choice.primary ?? grant.application_url}`;
   if (mode === "sources") {
     return `${head}
 
@@ -130,7 +135,11 @@ ${SHAPE}`;
 
 ${about}
 
-You also have Google Search available. If url_context does not show you the specific opportunity itself (a list, an unrelated page, or something empty/broken instead), use Google Search to find the correct page for this opportunity by its name and funder, then read that page with url_context instead of giving up.
+${
+    choice.pinned
+      ? "The URL above was chosen and checked by a person: it IS the page for this opportunity. Do not replace it with another page. If you cannot open it, use Google Search only to find text ABOUT this exact opportunity (its call page, guidelines or announcements) and extract from that."
+      : "You also have Google Search available. If url_context does not show you the specific opportunity itself (a list, an unrelated page, or something empty/broken instead), use Google Search to find the correct page for this opportunity by its name and funder, then read that page with url_context instead of giving up."
+  }
 
 ${SHAPE}`;
 }
@@ -175,13 +184,15 @@ async function callGemini(
   prompt: string,
   sourceParts: Part[],
   started: number,
-  diag?: Diag
+  diag?: Diag,
+  toolsOverride?: Tool[],
+  capMs?: number
 ): Promise<GeminiResult | null> {
-  const tools: Tool[] = [{ urlContext: {} }, { googleSearch: {} }];
+  const tools: Tool[] = toolsOverride ?? [{ urlContext: {} }, { googleSearch: {} }];
   for (let attempt = 0; attempt < GEMINI_MAX_RETRIES; attempt++) {
     // Every attempt is bounded by what's left of the route's time, so one hung
     // request can't run past Vercel's limit and lose the whole check.
-    const abortSignal = AbortSignal.timeout(Math.max(5_000, CALL_DEADLINE_MS - (Date.now() - started)));
+    const abortSignal = AbortSignal.timeout(Math.max(5_000, Math.min(capMs ?? Infinity, CALL_DEADLINE_MS - (Date.now() - started))));
     const config =
       mode === "tools"
         ? { tools, systemInstruction: SYSTEM_PROMPT, temperature: 0, abortSignal }
@@ -198,7 +209,11 @@ async function callGemini(
           `Gemini returned no text (${mode} mode): finishReason=${response.candidates?.[0]?.finishReason ?? "unknown"}` +
             (response.promptFeedback?.blockReason ? `, blockReason=${response.promptFeedback.blockReason}` : "")
         );
-        if (diag) diag.reason = response.promptFeedback?.blockReason ? `Gemini blocked the request (${response.promptFeedback.blockReason}).` : "Gemini returned an empty answer.";
+        const finish = response.candidates?.[0]?.finishReason;
+        if (diag)
+          diag.reason = response.promptFeedback?.blockReason
+            ? `Gemini blocked the request (${response.promptFeedback.blockReason}).`
+            : `Gemini returned an empty answer${finish ? ` (finish reason: ${finish})` : ""}.`;
         return null;
       }
       const meta = response.candidates?.[0]?.urlContextMetadata?.urlMetadata;
@@ -306,7 +321,7 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: { grantId?: unknown };
+  let body: { grantId?: unknown; pastedText?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -331,11 +346,26 @@ export async function POST(request: Request) {
   if (!grant) {
     return Response.json({ error: "Grant not found." }, { status: 404 });
   }
-  if (!grant.application_url) {
+  // The link a person typed into the Application Tracker's Breakdown is the one
+  // they opened and checked, so it is the link the check reads — and it is never
+  // swapped for one found by search (lib/eligibility/callLink.ts).
+  const pasted = pastedSources(body.pastedText);
+  const { data: linkRows, error: linkError } = await supabaseAdmin
+    .from("tracker_items")
+    .select("pipeline_link, updated_at")
+    .eq("grant_id", grantId)
+    .order("updated_at", { ascending: false });
+  if (linkError) console.warn("Could not read the saved link from tracker_items:", linkError.message);
+  const choice = chooseCallLink({
+    pinned: linkError ? null : pinnedLinkFrom(linkRows),
+    rfpUrl: grant.rfp_url,
+    applicationUrl: grant.application_url,
+  });
+  if (!choice.primary && !pasted) {
     return Response.json(
       {
         error:
-          "This grant has no source link on file, so there's nothing for Gemini to read. Add a link to the opportunity first (Application Tracker's \"+ Add grant\" form, or the grants table directly), then try again.",
+          "This opportunity has no link to read. Add one in the Application Tracker (open Breakdown → Link), or paste the call text under the check button, then try again.",
       },
       { status: 400 }
     );
@@ -356,14 +386,16 @@ export async function POST(request: Request) {
     }
   };
   const readScore = (g: GatheredSources | null) => (g ? g.pdfCount * 100_000 + g.textChars : -1);
-  const primaryUrl: string = grant.rfp_url || grant.application_url;
-  let gathered = await tryGather(primaryUrl);
+  // Text pasted by a person is used as it is; otherwise read the chosen link.
+  const primaryUrl: string = choice.primary ?? "";
+  let gathered: GatheredSources | null = pasted ?? (await tryGather(primaryUrl));
   if (
+    !pasted &&
     (!gathered || maxCoverage(gathered) === "landing_page_only") &&
-    primaryUrl !== grant.application_url &&
+    choice.alternate &&
     Date.now() - started < 15_000
   ) {
-    const alt = await tryGather(grant.application_url);
+    const alt = await tryGather(choice.alternate);
     if (readScore(alt) > readScore(gathered)) gathered = alt;
   }
 
@@ -373,11 +405,14 @@ export async function POST(request: Request) {
   // Search) for the official page and read that instead, time permitting.
   let linkNote: string | null = null;
   let linkReplaced = false;
-  const assessed = assessLink(gathered, grant);
-  if (assessed.status !== "ok") {
-    linkNote = assessed.note;
+  const assessed = pasted ? null : assessLink(gathered, grant);
+  if (assessed && assessed.status !== "ok") {
+    // A person's own link is never replaced: just say it couldn't be read here.
+    linkNote = choice.pinned
+      ? `Your saved link couldn't be read automatically (${(assessed.note ?? "").toLowerCase()}). It was kept as it is.`
+      : assessed.note;
     const tried = new Set([primaryUrl, grant.application_url, grant.rfp_url].filter(Boolean) as string[]);
-    if (Date.now() - started < 22_000) {
+    if (!choice.pinned && Date.now() - started < 22_000) {
       const found = await findOfficialLink(ai, grant, started);
       if (found?.url && !tried.has(found.url) && !isGroundingRedirect(found.url) && isSafeUrl(found.url)) {
         const left = 40_000 - (Date.now() - started);
@@ -395,14 +430,16 @@ export async function POST(request: Request) {
       }
     }
   }
-  const coverageCap = gathered ? maxCoverage(gathered) : "landing_page_only";
+  const rawCap = gathered ? maxCoverage(gathered) : "landing_page_only";
+  // Pasted text is a person's own choice of what to read: never treat it as "just a landing page".
+  const coverageCap = pasted && rawCap === "landing_page_only" ? "partial" : rawCap;
 
   let facts: CallFacts | null = null;
   let sources: string[] = [];
   const diag: Diag = { reason: null };
 
   if (gathered && coverageCap !== "landing_page_only") {
-    const result = await callGemini(ai, "sources", buildPrompt("sources", grant, gathered), gathered.parts as Part[], started, diag);
+    const result = await callGemini(ai, "sources", buildPrompt("sources", grant, gathered, choice), gathered.parts as Part[], started, diag);
     facts = result ? await factsFromReply(ai, result.text, started, diag) : null;
     if (facts) {
       sources = gathered.used;
@@ -411,22 +448,49 @@ export async function POST(request: Request) {
       if (coverageCap === "partial" && facts.source_coverage === "full_rfp") facts.source_coverage = "partial";
       // Only trust an RFP link that we actually read; otherwise use our best guess.
       facts.rfp_url = facts.rfp_url && gathered.used.includes(facts.rfp_url) ? facts.rfp_url : gathered.rfpUrl;
+      // A person's own link stays the recorded call link unless a document on that page was actually read.
+      if (choice.pinned && !facts.rfp_url) facts.rfp_url = choice.primary;
     }
   }
 
+  // Fallback: let Gemini read the link itself. Combining url_context with Google
+  // Search sometimes comes back empty, so step down to each tool on its own —
+  // a short cap on every attempt but the last leaves time for the next one.
   if (!facts && Date.now() - started < MIN_MS_FOR_FALLBACK) {
-    const result = await callGemini(ai, "tools", buildPrompt("tools", grant, null), [], started, diag);
-    facts = result ? await factsFromReply(ai, result.text, started, diag) : null;
-    if (facts) {
-      sources = result?.urlsRead && result.urlsRead.length ? result.urlsRead : [grant.application_url];
+    const variants: Tool[][] = [
+      [{ urlContext: {} }, { googleSearch: {} }],
+      [{ urlContext: {} }],
+      [{ googleSearch: {} }],
+    ];
+    for (let i = 0; i < variants.length && !facts; i++) {
+      if (i > 0 && Date.now() - started > TOOL_RETRY_LIMIT_MS) break;
+      const toolSet = variants[i];
+      diag.reason = null;
+      const result = await callGemini(
+        ai,
+        "tools",
+        buildPrompt("tools", grant, null, choice),
+        [],
+        started,
+        diag,
+        toolSet,
+        i < variants.length - 1 ? TOOL_ATTEMPT_CAP_MS : undefined
+      );
+      facts = result ? await factsFromReply(ai, result.text, started, diag) : null;
+      if (!facts) continue;
+      const usedUrlContext = toolSet.some((t) => "urlContext" in t);
+      sources = result?.urlsRead && result.urlsRead.length ? result.urlsRead : choice.primary ? [choice.primary] : [];
       // If Gemini reported url_context metadata and NOT ONE page was read
       // successfully, we can't have seen the real call text — cap coverage so
       // the verdict can't be "fit" without a human looking (a hard "not fit"
       // still stands). With no metadata at all we trust the model's own rating.
-      if (result && result.urlsRead !== null && result.urlsRead.length === 0) {
+      // A search-only attempt never opened the page, so it is capped the same way.
+      if (!usedUrlContext || (result && result.urlsRead !== null && result.urlsRead.length === 0)) {
         facts.source_coverage = "landing_page_only";
         facts.extraction_confidence = Math.min(facts.extraction_confidence, 0.4);
       }
+      // A person's own link stays the recorded call link, not a model-guessed one.
+      if (choice.pinned && choice.primary) facts.rfp_url = choice.primary;
     }
   }
 
@@ -439,12 +503,18 @@ export async function POST(request: Request) {
         : "The page could not be read.");
     console.error(`Eligibility check gave up after ${elapsed}s: ${why}`);
     return Response.json(
-      { error: `Gemini did not return a usable response. ${why} ${linkNote ? `(${linkNote}) ` : ""}Try again in a minute; if it repeats, open the link and check it is the opportunity's own page.` },
+      {
+        error: `Gemini did not return a usable response. ${why} ${linkNote ? `(${linkNote}) ` : ""}${
+          choice.pinned
+            ? "Your saved link was used as it is and has not been changed. Try again in a minute, or paste the call text into the box under the check button."
+            : "Try again in a minute. If it repeats, open the link and check it is the opportunity's own page, put the right link in the Application Tracker (Breakdown → Link), or paste the call text under the check button."
+        }`,
+      },
       { status: 502 }
     );
   }
   if (isAward(grant)) facts.is_award = true;
-  if (!facts.rfp_url) facts.rfp_url = grant.application_url;
+  if (!facts.rfp_url) facts.rfp_url = choice.primary ?? grant.application_url;
   // No deadline in the documents? Use the scraper's stored one (if still ahead).
   applyDeadlineFallback(facts, grant.deadline);
 

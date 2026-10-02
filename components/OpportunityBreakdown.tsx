@@ -276,7 +276,7 @@ export default function OpportunityBreakdown({
           <Field label="Submission date">
             <input key={k("submitted")} type="date" defaultValue={item.submission_date ?? ""} onBlur={(e) => saveText("submission_date", e.target.value)} className={inputCls} />
           </Field>
-          <Field label="Link" hint={item.link_check_note ? undefined : "Use ✨ Fill with Gemini to double-check it."}>
+          <Field label="Link" hint="The link you put here is the one the eligibility check and ✨ Fill with Gemini read. It is never replaced automatically.">
             <input key={k("link")} type="url" defaultValue={item.pipeline_link ?? ""} placeholder={eff.link || "https://…"} onBlur={(e) => saveText("pipeline_link", e.target.value)} className={inputCls} />
             {item.link_check_note && (
               <p className={`mt-1 text-xs ${item.link_check_note.startsWith("Link checked") ? "text-emerald-700" : "text-amber-700"}`}>

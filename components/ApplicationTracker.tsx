@@ -5,6 +5,8 @@ import { supabase } from "@/lib/supabaseClient";
 import { ActionItem, Grant, OpportunityNote, TRACKER_STATUSES, TrackerItem, TrackerStatus } from "@/lib/types";
 import OpportunityBreakdown, { ActionRow } from "@/components/OpportunityBreakdown";
 import { LEADS, canonicalLead, categoryLabel, dueState, effectiveFields, myOpenActions, statusLabel } from "@/lib/pipeline";
+import { KIND_BADGE, kindOf } from "@/lib/opportunityType";
+import { findSimilarTitle } from "@/lib/titleSimilarity";
 
 const STATUS_LABELS: Record<TrackerStatus, string> = {
   tracking: "Tracking",
@@ -238,6 +240,27 @@ export default function ApplicationTracker() {
 
     let grantId = existing?.id as string | undefined;
 
+    // Not the exact title? Look for the same opportunity worded differently
+    // (~75% of the title the same — lib/titleSimilarity.ts), so "EU 2027 Call
+    // for Solutions" attaches to "Call for Solutions Horizon Europe EU 2027".
+    if (!grantId) {
+      const { data: all } = await supabase.from("grants").select("id, title").order("first_seen_at", { ascending: false }).limit(2000);
+      const similar = findSimilarTitle(title, (all ?? []) as { id: string; title: string | null }[]);
+      if (similar) grantId = similar.match.id;
+    }
+
+    // Each opportunity is tracked once: if it is already in the tracker, say so.
+    if (grantId) {
+      const already = items.find((i) => i.grant_id === grantId);
+      const { data: trackedRows } = already ? { data: [already] } : await supabase.from("tracker_items").select("id").eq("grant_id", grantId).limit(1);
+      if (trackedRows && trackedRows.length) {
+        const name = already?.grant?.title ?? "this opportunity";
+        setError(`Already tracked: "${name}" is in the tracker${already?.owner ? ` (lead: ${already.owner})` : ""}. Each opportunity is tracked once — add your notes to it instead.`);
+        if (already) setExpandedId(already.id);
+        return;
+      }
+    }
+
     if (grantId) {
       if (Object.keys(grantFields).length > 0) {
         const { error: enrichError } = await supabase
@@ -272,7 +295,7 @@ export default function ApplicationTracker() {
       notes: manualNotes.trim() || null,
     });
     if (trackerError) {
-      setError(trackerError.message);
+      setError(trackerError.code === "23505" ? "Already tracked — each opportunity is tracked once. Refresh to see it." : trackerError.message);
       return;
     }
     resetManualForm();
@@ -507,6 +530,9 @@ export default function ApplicationTracker() {
                     {item.grant?.title ?? "(untitled grant)"}
                   </p>
                 )}
+                <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${KIND_BADGE[kindOf(item.grant)].className}`}>
+                  {KIND_BADGE[kindOf(item.grant)].label}
+                </span>
                 {details && <p className="text-sm text-neutral-500">{details}</p>}
                 {item.notes && <p className="mt-1 text-sm italic text-neutral-500">{item.notes}</p>}
                 {(chips.length > 0 || openCount > 0) && (

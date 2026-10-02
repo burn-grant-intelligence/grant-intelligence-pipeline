@@ -61,6 +61,9 @@ export default function EligibilityTracker() {
   const [error, setError] = useState<string | null>(null);
   const [fitFilter, setFitFilter] = useState<FitFilter>("all");
   const [checkingGrantId, setCheckingGrantId] = useState<string | null>(null);
+  // "Paste the call text" fallback: which cards have the box open, and what is typed in it.
+  const [pasteOpen, setPasteOpen] = useState<Record<string, boolean>>({});
+  const [pasteDrafts, setPasteDrafts] = useState<Record<string, string>>({});
 
   useEffect(() => {
     loadData();
@@ -144,18 +147,20 @@ export default function EligibilityTracker() {
     );
   }
 
-  async function checkEligibility(grantId: string) {
+  async function checkEligibility(grantId: string, itemId?: string, pastedText?: string) {
     setCheckingGrantId(grantId);
     setError(null);
     try {
       const res = await fetch("/api/check-eligibility", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ grantId }),
+        body: JSON.stringify(pastedText ? { grantId, pastedText } : { grantId }),
       });
       const json = await res.json();
       if (!res.ok) {
         setError(json.error ?? "Eligibility check failed.");
+        // Offer the paste-the-text fallback on the card that failed.
+        if (itemId) setPasteOpen((prev) => ({ ...prev, [itemId]: true }));
         return;
       }
       // The route returns { grant: <columns written onto the grant>, tracker:
@@ -174,6 +179,7 @@ export default function EligibilityTracker() {
       );
     } catch {
       setError("Could not reach the eligibility check endpoint. Is the app deployed with GEMINI_API_KEY set?");
+      if (itemId) setPasteOpen((prev) => ({ ...prev, [itemId]: true }));
     } finally {
       setCheckingGrantId(null);
     }
@@ -271,6 +277,12 @@ export default function EligibilityTracker() {
           const isChecking = checkingGrantId === grant?.id;
           const hasBeenChecked = !!grant?.eligibility_checked_at;
           const docs = grant?.supporting_docs ?? [];
+          // The link a check reads: the one a person saved in the Application Tracker
+          // (Breakdown → Link) wins; otherwise the last link a check used, then the scraper's.
+          const savedLink = item.pipeline_link?.trim() || null;
+          const checkLink = savedLink || grant?.rfp_url || grant?.application_url || null;
+          const pastedDraft = pasteDrafts[item.id] ?? "";
+          const showPaste = !!pasteOpen[item.id];
 
           return (
             <div
@@ -289,13 +301,68 @@ export default function EligibilityTracker() {
                   </p>
                 </div>
                 <button
-                  onClick={() => grant?.id && checkEligibility(grant.id)}
-                  disabled={isChecking || !grant?.application_url}
-                  title={!grant?.application_url ? "No source link on file for this grant" : undefined}
+                  onClick={() => grant?.id && checkEligibility(grant.id, item.id)}
+                  disabled={isChecking || !checkLink}
+                  title={!checkLink ? "No link on file — add one in the Application Tracker (Breakdown → Link) or paste the call text" : undefined}
                   className="shrink-0 rounded-md border border-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {isChecking ? "Checking…" : hasBeenChecked ? "Re-check eligibility" : "Check eligibility"}
                 </button>
+              </div>
+
+              <div className="flex flex-col gap-2 text-xs text-neutral-500">
+                <p className="break-all">
+                  {checkLink ? (
+                    <>
+                      <span className="font-medium text-neutral-600">
+                        {savedLink ? "Link used (yours, from the Application Tracker): " : "Link used: "}
+                      </span>
+                      <a
+                        href={checkLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline decoration-neutral-300 hover:text-[var(--accent)]"
+                      >
+                        {checkLink}
+                      </a>
+                    </>
+                  ) : (
+                    "No link on file. Add one in the Application Tracker (open Breakdown → Link), or paste the call text below."
+                  )}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setPasteOpen((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
+                  className="self-start underline decoration-neutral-300 hover:text-[var(--accent)]"
+                >
+                  {showPaste ? "Hide paste box" : "Link not opening? Paste the call text instead"}
+                </button>
+                {showPaste && (
+                  <div className="flex flex-col gap-2">
+                    <textarea
+                      value={pastedDraft}
+                      onChange={(e) => setPasteDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                      rows={6}
+                      placeholder="Open the call page yourself, copy the whole text (eligibility, deadline, prize or funding, how to apply) and paste it here."
+                      className="w-full rounded-md border border-neutral-300 p-2 text-sm text-neutral-800"
+                    />
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => grant?.id && checkEligibility(grant.id, item.id, pastedDraft)}
+                        disabled={isChecking || pastedDraft.trim().length < 150}
+                        className="rounded-md border border-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {isChecking ? "Checking…" : "Check this text"}
+                      </button>
+                      <span>
+                        {pastedDraft.trim().length < 150
+                          ? `${pastedDraft.trim().length}/150 characters needed`
+                          : "Your link stays as it is; only this text is read."}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">

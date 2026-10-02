@@ -532,7 +532,8 @@ function DetailModal({
   onOwnerChange: (owner: string) => void;
 }) {
   const grant = item.grant;
-  const link = grant?.application_url || grant?.rfp_url || null;
+  // The link a person saved in the Application Tracker wins over the scraper's.
+  const link = item.pipeline_link?.trim() || grant?.application_url || grant?.rfp_url || null;
 
   return (
     <div

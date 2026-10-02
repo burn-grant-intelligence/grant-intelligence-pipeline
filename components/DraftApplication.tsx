@@ -167,7 +167,7 @@ function buildPrompt(item: TrackerItem): string {
   const funder = g?.funder ?? "an unnamed funder";
   const amount = g?.amount ? `${g.currency ?? "USD"} ${g.amount.toLocaleString()}` : "Not stated";
   const deadline = g?.deadline ?? "Not stated";
-  const applicationUrl = g?.application_url ?? null;
+  const applicationUrl = item.pipeline_link?.trim() || g?.application_url || null;
   const host = hostOf(applicationUrl);
   const isRedirect = isGeminiGroundingRedirect(applicationUrl);
 

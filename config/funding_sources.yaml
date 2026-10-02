@@ -1,0 +1,166 @@
+# BURN's longlist of funding & procurement sources (2026-10-02) — used by
+# scripts/gemini_discover.py (the Tuesday/Friday "Gemini discovery" run).
+#
+# How it is used:
+#   - sources: each page is read by Gemini, which saves only calls that are OPEN
+#     FOR APPLICATIONS NOW (an RFP, call for proposals, tender, funding round or
+#     application window you can submit to). Programme pages with no open call,
+#     forthcoming rounds and closed calls are skipped.
+#     There are too many pages to read on every run, so each run reads a
+#     rotating batch: SOURCES_P1_PER_RUN priority-1 pages and SOURCES_OTHER_PER_RUN
+#     priority-2/3 pages (set in gemini_discover.py, or with the environment
+#     variables of the same names). Priority 1 comes round about every 3 weeks,
+#     the rest about every 6 weeks.
+#   - funders_to_watch + every source name: given to Gemini's broad search as
+#     funders whose OPEN calls are worth looking for, including ones that are not
+#     clean-cooking specific (energy, climate, innovation, manufacturing, jobs).
+#
+# Add, remove or re-prioritise freely; no code change needed.
+# (The pasted list stopped at "AgriFI" — add the rest of it below.)
+# LinkedIn's #callforproposals hashtag page is left out: Gemini cannot read
+# LinkedIn, and LinkedIn is already covered by scripts/social_discover.py.
+
+funders_to_watch:
+  - "Solar Impulse Foundation"
+  - "Ngwee Ngwee Fund"
+  - "Development Innovation Ventures (DIV)"
+  - "Fund for Innovation in Development (FID)"
+  - "European Union programmes (Horizon Europe, Global Gateway, EU delegation calls, EIC, EIT)"
+  - "UNIDO"
+  - "UNCDF"
+  - "GIZ (including develoPPP and EnDev)"
+  - "NEFCO (Modern Cooking Facility for Africa, Beyond the Grid Fund for Africa)"
+  - "TDB Group (Trade and Development Bank)"
+  - "PIFORES"
+
+sources:
+  # ── Priority 1 ──
+  - { name: "World Bank — procurement notices", type: Multilateral, priority: 1, url: "http://projects.worldbank.org/procurement/procurementsearch?lang=en&qterm=&showrecent=true&srce=notices" }
+  - { name: "Global Center on Adaptation (GCA) — procurement", type: Program, priority: 1, url: "https://gca.org/about-us/procurement/" }
+  - { name: "ACDI/VOCA — contracting", type: Contractor, priority: 1, url: "https://www.acdivoca.org/work-with-us/contracting-vehicles/" }
+  - { name: "AECF — press releases", type: Challenge Fund, priority: 1, url: "https://www.aecfafrica.org/media-centre/press-releases/" }
+  - { name: "AECF — funding opportunities", type: Challenge Fund, priority: 1, url: "https://www.aecfafrica.org/im-looking-to/see-aecfs-funding-opportunities/" }
+  - { name: "AECF — competitions", type: Challenge Fund, priority: 1, url: "https://www.aecfafrica.org/approach/competitions/" }
+  - { name: "AGRA — opportunities", type: Program, priority: 1, url: "https://agra.org/opportunities/" }
+  - { name: "Beyond the Grid Fund for Africa (BGFA, Nefco/Sida) — funding rounds", type: Challenge Fund, priority: 1, url: "https://beyondthegrid.africa/funding-rounds/" }
+  - { name: "Work With USAID — sub-opportunities", type: Platform, priority: 1, url: "https://www.workwithusaid.org/sub-opportunities" }
+  - { name: "Africa Trade and Investment (ATI)", type: Program, priority: 1, url: "https://www.atiprogram.com/" }
+  - { name: "Africa Trade and Investment (ATI) — live grant opportunities", type: Program, priority: 1, url: "https://www.atiprogram.com/live-grant-opportunities" }
+  - { name: "CEI Africa", type: Program, priority: 1, url: "https://cei-africa.com/" }
+  - { name: "CEI Africa — funding windows", type: Program, priority: 1, url: "https://cei-africa.com/funding-windows/" }
+  - { name: "Chemonics — procurements", type: Contractor, priority: 1, url: "https://www.chemonics.com/our-procurements/" }
+  - { name: "Clean Cooking Alliance — funding opportunities", type: Platform, priority: 1, url: "https://cleancooking.org/funding-opportunities/" }
+  - { name: "Flanders International Climate Action Programme (G-STIC)", type: Program, priority: 1, url: "https://www.vlaanderen.be/en/environment/flanders-international-climate-action-programme" }
+  - { name: "G-STIC — news", type: Program, priority: 1, url: "https://www.gstic.org/news/" }
+  - { name: "DAI — current procurements", type: Contractor, priority: 1, url: "https://www.dai.com/our-work/working-with-dai/current-procurements" }
+  - { name: "DANIDA Green Business Partnerships (DGBP)", type: Program, priority: 1, url: "https://danida-business-partnerships.dk/" }
+  - { name: "Devex — open and forecast tenders", type: Platform, priority: 1, url: "https://www.devex.com/funding/r?report=tender-287099&filter%5Bstatuses%5D%5B%5D=forecast&filter%5Bstatuses%5D%5B%5D=open" }
+  - { name: "FCDO — international development funding", type: Bilateral, priority: 1, url: "https://www.gov.uk/international-development-funding" }
+  - { name: "EU Funding & Tenders portal", type: Multilateral, priority: 1, url: "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/home" }
+  - { name: "EU TED (Tenders Electronic Daily)", type: Multilateral, priority: 1, url: "https://ted.europa.eu/TED/search/search.do" }
+  - { name: "European Institute of Innovation and Technology (EIT) — opportunities", type: Program, priority: 1, url: "https://eit.europa.eu/our-activities/opportunities" }
+  - { name: "Invest for Jobs (IFE) — calls for proposals", type: Program, priority: 1, url: "https://invest-for-jobs.com/en/calls-for-proposals-overview" }
+  - { name: "GSMA — calls for proposals (press releases)", type: Challenge Fund, priority: 1, url: "https://www.gsma.com/newsroom/press-releases/" }
+  - { name: "Innovate UK — competitions (Energy Catalyst, Agritech Catalyst)", type: Program, priority: 1, url: "https://apply-for-innovation-funding.service.gov.uk/competition/search" }
+  - { name: "UKRI — Innovate UK opportunities", type: Program, priority: 1, url: "https://www.ukri.org/opportunity/?filter_council%5B%5D=822" }
+  - { name: "MECS Challenge Fund (Modern Energy Cooking Services)", type: Challenge Fund, priority: 1, url: "https://www.mecs.org.uk/challenge/" }
+  - { name: "Mercy Corps — tenders", type: Contractor, priority: 1, url: "https://www.mercycorps.org/tenders" }
+  - { name: "Modern Cooking Facility for Africa (MCFA) — apply for funding", type: Challenge Fund, priority: 1, url: "https://www.moderncooking.africa/apply-for-funding/" }
+  - { name: "Nefco — Modern Cooking Facility for Africa", type: Challenge Fund, priority: 1, url: "https://www.nefco.int/fund-mobilisation/funds-managed-by-nefco/modern-cooking-facility-for-africa/" }
+  - { name: "MSP Grants", type: Program, priority: 1, url: "https://www.mspgrants.com/" }
+  - { name: "MSP Grants — opportunities", type: Program, priority: 1, url: "https://www.mspgrants.com/opportunities/" }
+  - { name: "Palladium — tenders", type: Contractor, priority: 1, url: "https://thepalladiumgroup.com/tenders" }
+  - { name: "Nefco — financing (other regions)", type: Program, priority: 1, url: "https://www.nefco.int/financing/other-regions/" }
+  - { name: "Nefco — procurements", type: Program, priority: 1, url: "https://www.nefco.int/procurements/" }
+  - { name: "Powering Renewable Energy Opportunities (PREO) — apply for a grant", type: Program, priority: 1, url: "https://www.preo.org/apply-for-a-grant/" }
+  - { name: "SNV — updates", type: Contractor, priority: 1, url: "https://snv.org/updates?types=news" }
+  - { name: "Terra Viva Grants — funding news", type: Platform, priority: 1, url: "https://terravivagrants.org/funding-news/" }
+  - { name: "Tetra Tech — news", type: Contractor, priority: 1, url: "https://www.tetratech.com/news-and-insights/" }
+  - { name: "UN Global Marketplace (UNGM) — notices", type: Platform, priority: 1, url: "https://www.ungm.org/Public/Notice" }
+  - { name: "UNCDF — calls", type: Multilateral, priority: 1, url: "https://www.uncdf.org/search-results?categoryId=188" }
+  - { name: "UNCDF — application portal", type: Multilateral, priority: 1, url: "https://apply.uncdf.org/" }
+  - { name: "RTI International — current opportunities", type: Contractor, priority: 1, url: "https://www.rti.org/current-opportunities" }
+  - { name: "Abt Associates — US solicitations", type: Contractor, priority: 1, url: "https://www.abtassociates.com/solicitations/us-solicitations-and-business-inquiries" }
+  - { name: "Abt Associates — Australia solicitations", type: Contractor, priority: 1, url: "https://www.abtassociates.com/solicitations/australia-solicitations" }
+  - { name: "CLASP — updates", type: Program, priority: 1, url: "https://clasp.ngo/updates" }
+  - { name: "Creative Associates — procurement notices", type: Contractor, priority: 1, url: "https://www.creativeassociatesinternational.com/procurement-consultant-notices/" }
+  - { name: "EEP Africa — how to apply", type: Challenge Fund, priority: 1, url: "https://eepafrica.org/how-to-apply/" }
+  - { name: "NORAD / Norway MFA — grant calls", type: Bilateral, priority: 1, url: "https://grants.mfa.no/#/calls" }
+  - { name: "Transforming Energy Access (TEA, Carbon Trust) — funding opportunities", type: Challenge Fund, priority: 1, url: "https://tea.carbontrust.com/latest-funding-opportunities" }
+  - { name: "RVO Netherlands Enterprise Agency — subsidies and programmes", type: Bilateral, priority: 1, url: "https://english.rvo.nl/subsidies-programmes" }
+  - { name: "Grants.gov (US Government)", type: Bilateral, priority: 1, url: "https://www.grants.gov/" }
+
+  # ── Priority 2 ──
+  - { name: "GET.invest — funding database", type: Platform, priority: 2, url: "https://www.get-invest.eu/funding-database/" }
+  - { name: "Global Affairs Canada — funding for development projects", type: Bilateral, priority: 2, url: "https://www.international.gc.ca/world-monde/funding-financement/funding_development_projects-financement_projets_developpement.aspx?lang=eng" }
+  - { name: "Enabel (Belgian Development Agency) — grants", type: Bilateral, priority: 2, url: "https://www.enabel.be/grants/" }
+  - { name: "Government of the Netherlands — grant programmes", type: Bilateral, priority: 2, url: "https://www.government.nl/topics/grant-programmes" }
+  - { name: "Carbon Trust — tenders", type: Contractor, priority: 2, url: "https://www.carbontrust.com/tenders" }
+  - { name: "TechEmerge (IFC) — news", type: Program, priority: 2, url: "https://www.techemerge.org/news/" }
+  - { name: "P4G Partnerships", type: Challenge Fund, priority: 2, url: "https://p4gpartnerships.org/" }
+  - { name: "AECID (Spanish Cooperation) — news", type: Bilateral, priority: 2, url: "https://www.aecid.es/ES/sala-de-prensa/noticias" }
+  - { name: "Advance Consulting — calls", type: Platform, priority: 2, url: "https://www.advanceconsulting.nl/calls/" }
+  - { name: "AFD — calls for projects", type: Bilateral, priority: 2, url: "https://www.afd.fr/en/calls-projects" }
+  - { name: "AFD — tenders", type: Bilateral, priority: 2, url: "https://tenders-afd.dgmarket.com/" }
+  - { name: "ComCashew (formerly African Cashew Initiative)", type: Challenge Fund, priority: 2, url: "http://www.africancashewinitiative.org/index.php?lang=eng&page=3" }
+  - { name: "AgResults — news", type: Challenge Fund, priority: 2, url: "https://agresults.org/news-and-blog" }
+  - { name: "AgriFin Accelerate — tenders", type: Program, priority: 2, url: "https://www.mercycorpsagrifin.org/tenders/" }
+  - { name: "Business Partnership Facility (Belgium) — Enterprises for SDGs", type: Challenge Fund, priority: 2, url: "https://www.kbs-frb.be/EnterprisesForSDGs" }
+  - { name: "Dutch Fund for Climate and Development (DFCD)", type: Program, priority: 2, url: "https://thedfcd.com/" }
+  - { name: "ECOWAS Regional Agency for Agriculture and Food (ARAA)", type: Program, priority: 2, url: "https://www.araa.org/en/about-raaf" }
+  - { name: "Efficiency for Access — grants", type: Program, priority: 2, url: "https://efficiencyforaccess.org/grants" }
+  - { name: "EnDev (Energising Development) — news", type: Program, priority: 2, url: "https://endev.info/content/News" }
+  - { name: "Enterprise Zambia Challenge Fund (EZCF)", type: Program, priority: 2, url: "https://enterprisezambia.org/financial-support/" }
+  - { name: "Global Partnership for Results-Based Approaches (GPRBA) — news", type: Program, priority: 2, url: "https://www.gprba.org/news" }
+  - { name: "Green Climate Fund — news", type: Multilateral, priority: 2, url: "https://www.greenclimate.fund/news" }
+  - { name: "Green Climate Fund — RFPs", type: Multilateral, priority: 2, url: "https://www.greenclimate.fund/projects/rfp" }
+  - { name: "Humanitarian Grand Challenge", type: Challenge Fund, priority: 2, url: "https://humanitariangrandchallenge.org/" }
+  - { name: "Humanitarian Innovation Fund (Elrha) — funding", type: Challenge Fund, priority: 2, url: "http://www.elrha.org/hif/funding/" }
+  - { name: "Humanitarian Innovation Fund (Elrha) — funding opportunities", type: Challenge Fund, priority: 2, url: "https://www.elrha.org/programme/hif/#funding-opportunities" }
+  - { name: "PPRA Tanzania — public notices", type: Government, priority: 2, url: "https://www.ppra.go.tz/public-notice" }
+  - { name: "PPRA Tanzania — TANePS current opportunities", type: Government, priority: 2, url: "https://www.taneps.go.tz/epps/prepareCurrentOpportunities.do?selectedItem=prepareCurrentOpportunities.do" }
+  - { name: "Rural Electrification Agency Nigeria — World Bank procurement notices", type: Government, priority: 2, url: "https://rea.gov.ng/world-bank-procurement-notices/" }
+  - { name: "Rural Energy Agency Tanzania — news", type: Government, priority: 2, url: "https://rea.go.tz/News-Center" }
+  - { name: "TerraMatch AFR100", type: Challenge Fund, priority: 2, url: "https://www.africa.terramatch.org/" }
+  - { name: "UN Development Business", type: Multilateral, priority: 2, url: "https://devbusiness.un.org/content/site-search" }
+  - { name: "FinDev Gateway (CGAP) — news", type: Bilateral, priority: 2, url: "https://www.findevgateway.org/news" }
+  - { name: "UK PACT — Green Recovery Challenge Fund", type: Challenge Fund, priority: 2, url: "https://www.ukpact.co.uk/green-recovery-challenge-fund" }
+  - { name: "UK PACT — GRCF guidance", type: Challenge Fund, priority: 2, url: "https://www.ukpact.co.uk/grcf-guidance" }
+  - { name: "EU Funding & Tenders — open and forthcoming topics", type: Multilateral, priority: 2, url: "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-search;callCode=null;freeTextSearchKeyword=;matchWholeText=true;typeCodes=0,1,2,8;statusCodes=31094501,31094502,31094503;programmePeriod=null;programCcm2Id=111111;programDivisionCode=null;focusAreaCode=null;destination=null;mission=null;geographicalZonesCode=null;programmeDivisionProspect=null;startDateLte=null;startDateGte=null;crossCuttingPriorityCode=null;cpvCode=null;performanceOfDelivery=null;sortQuery=sortStatus;orderBy=asc;onlyTenders=false;topicListKey=topicSearchTablePageState" }
+  - { name: "EuropeAid — online services (EU external action tenders)", type: Multilateral, priority: 2, url: "https://webgate.ec.europa.eu/europeaid/online-services/index.cfm?do=publi.welcome&nbPubliList=15&orderbyad=Desc&searchtype=QS&orderby=upd&userlanguage=en" }
+  - { name: "World Bank — procurement (eConsultant)", type: Multilateral, priority: 2, url: "https://projects.worldbank.org/en/projects-operations/procurement?srce=both" }
+
+  # ── Priority 3 ──
+  - { name: "Nordic Climate Facility (NCF)", type: Program, priority: 3, url: "https://www.nordicclimatefacility.com/" }
+  - { name: "Nordic Climate Facility (NCF) — how to apply", type: Program, priority: 3, url: "https://www.nordicclimatefacility.com/how-to-apply" }
+  - { name: "FFEM (French Facility for Global Environment) — news", type: Program, priority: 3, url: "https://www.ffem.fr/en/actualites" }
+  - { name: "Off-Grid Clean Energy Facility Benin (OCEF)", type: Program, priority: 3, url: "https://ocef.bj/en/" }
+  - { name: "WE4F East Africa Hub", type: Program, priority: 3, url: "https://eastafrica.we4f.org/" }
+  - { name: "USADF — apply", type: Program, priority: 3, url: "https://www.usadf.gov/apply" }
+  - { name: "West Africa Trade and Investment Hub — co-investment opportunities", type: Program, priority: 3, url: "https://westafricatradehub.com/co-investment-opportunities/" }
+  - { name: "Ministry of Energy Tanzania — news bulletin", type: Government, priority: 3, url: "https://www.nishati.go.tz/documents/news-bulletin" }
+  - { name: "ECREEE (EREF, ECOWAS) — procurements", type: Program, priority: 3, url: "http://www.ecreee.org/procurements" }
+  - { name: "EFInA (Nigeria)", type: Challenge Fund, priority: 3, url: "https://efina.org.ng/" }
+  - { name: "EFInA (Nigeria) — news", type: Challenge Fund, priority: 3, url: "https://efina.org.ng/news/" }
+  - { name: "Global Resilience Partnership — news", type: Program, priority: 3, url: "http://www.globalresiliencepartnership.org/news/" }
+  - { name: "PIDG DevCo — respond to a tender", type: Program, priority: 3, url: "https://www.pidg.org/working-together/respond-to-a-tender/" }
+  - { name: "SMEP Programme (Sustainable Manufacturing and Environmental Pollution)", type: Program, priority: 3, url: "https://smepprogramme.org/manufacturing-pollution/" }
+  - { name: "Africa Business Heroes", type: Challenge Fund, priority: 3, url: "https://africabusinessheroes.org/en/" }
+  - { name: "Alphamundi Foundation — current programs", type: Program, priority: 3, url: "https://www.alphamundifoundation.org/current-programs" }
+  - { name: "FFEM (French Facility for Global Environment)", type: Bilateral, priority: 3, url: "https://www.ffem.fr/fr" }
+  - { name: "Rwanda Green Fund (Fonerwa) — who can apply", type: Program, priority: 3, url: "https://greenfund.rw/who-can-apply" }
+  - { name: "Fonerwa — private sector", type: Program, priority: 3, url: "http://www.fonerwa.org/private-sector/about" }
+  - { name: "GEF Small Grants Programme", type: Program, priority: 3, url: "https://sgp.undp.org/" }
+  - { name: "Grand Challenges Canada — funding opportunities", type: Challenge Fund, priority: 3, url: "http://www.grandchallenges.ca/funding-opportunities/" }
+  - { name: "IDRC — funding", type: Program, priority: 3, url: "https://www.idrc.ca/en/funding" }
+  - { name: "IFAD — grants design and management", type: Multilateral, priority: 3, url: "https://www.ifad.org/en/grants-design-and-management" }
+  - { name: "IFAD — grants", type: Multilateral, priority: 3, url: "https://www.ifad.org/web/guest/grants" }
+  - { name: "Kenya Catalytic Jobs Fund", type: Program, priority: 3, url: "https://kenyacatalyticjobsfund.org/" }
+  - { name: "MCC (Millennium Challenge Corporation) — tenders", type: Bilateral, priority: 3, url: "https://mcc.dgmarket.com/" }
+  - { name: "Mitigation Action Facility — calls for projects", type: Program, priority: 3, url: "https://mitigation-action.org/calls-for-projects/" }
+  - { name: "NORAD — Enterprise Development for Jobs", type: Program, priority: 3, url: "https://norad.no/en/front/funding/private-sector-development/enterprise-development-for-jobs/" }
+  - { name: "Nordic Development Fund (NDF) — opportunities", type: Multilateral, priority: 3, url: "https://www.ndf.fi/opportunities" }
+  - { name: "Sida (Sweden) — tenders", type: Bilateral, priority: 3, url: "https://www.kommersannons.se/elite/Notice/NoticeList.aspx" }
+  - { name: "TradeMark Africa — procurement", type: Program, priority: 3, url: "https://trademarkafrica.com/procurement/" }
+  - { name: "Transform (Unilever / FCDO)", type: Program, priority: 3, url: "https://www.transform.global/" }
+  - { name: "BRILHO Mozambique — how to apply", type: Program, priority: 3, url: "https://brilhomoz.com/how-to-apply" }

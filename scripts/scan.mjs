@@ -15,6 +15,7 @@ import Parser from "rss-parser";
 import { chromium } from "playwright";
 import Groq from "groq-sdk";
 import { supabaseAdmin as supabase } from "./supabaseAdmin.mjs";
+import { findSimilarTitle } from "./titleSimilarity.mjs";
 
 if (!process.env.GROQ_API_KEY) {
   throw new Error("Missing GROQ_API_KEY. Get a free key at console.groq.com and set it as an env var.");
@@ -247,8 +248,34 @@ function deadlineHasPassed(deadline) {
   return deadline < TODAY;
 }
 
+// Opportunities already in the Grant Scanner (discarded ones included). A new
+// title matching one of them by ~75% of its wording is the same call
+// (scripts/titleSimilarity.mjs) and only refreshes last_seen_at. Loaded once.
+let existingGrants = null;
+async function loadExistingGrants() {
+  if (existingGrants) return existingGrants;
+  existingGrants = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase.from("grants").select("id,title").order("first_seen_at", { ascending: true }).range(from, from + 999);
+    if (error) {
+      console.error("  ! could not load existing opportunities for the duplicate check:", error.message);
+      break;
+    }
+    existingGrants.push(...(data ?? []).filter((r) => r.title));
+    if (!data || data.length < 1000) break;
+  }
+  return existingGrants;
+}
+
 async function upsertGrant(fields, source, fallbackUrl) {
   if (!fields.title) return;
+
+  const hit = findSimilarTitle(fields.title, await loadExistingGrants());
+  if (hit) {
+    console.log(`  - Already in the Grant Scanner (${hit.result.reason}): ${fields.title}  =  ${hit.match.title}`);
+    if (hit.match.id) await supabase.from("grants").update({ last_seen_at: new Date().toISOString() }).eq("id", hit.match.id);
+    return;
+  }
 
   if (looksLikeAwardNews(fields.title)) {
     console.log(`  - Skipped (reads like "already funded" news, not an open opportunity): ${fields.title}`);
@@ -290,7 +317,10 @@ async function upsertGrant(fields, source, fallbackUrl) {
   );
 
   if (error) console.error(`  ! Supabase upsert failed for "${fields.title}":`, error.message);
-  else console.log(`  + Upserted: ${fields.title}`);
+  else {
+    existingGrants?.push({ id: null, title: fields.title });
+    console.log(`  + Upserted: ${fields.title}`);
+  }
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

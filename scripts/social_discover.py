@@ -36,6 +36,8 @@ from datetime import datetime, timezone
 
 import requests
 
+from title_similarity import find_similar_title
+
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 BRIGHTDATA_API_KEY = os.environ["BRIGHTDATA_API_KEY"]
@@ -529,6 +531,35 @@ def content_hash(title: str, url: str) -> str:
     return hashlib.sha256(f"{title}::{url or ''}".lower().encode("utf-8")).hexdigest()
 
 
+# Opportunities already in the Grant Scanner (discarded ones included). A post
+# whose opportunity matches one of them by ~75% of the title wording is the
+# same call (scripts/title_similarity.py) and is not saved again. Loaded once.
+_existing_grants: list[dict] | None = None
+
+
+def _existing() -> list[dict]:
+    global _existing_grants
+    if _existing_grants is None:
+        rows: list[dict] = []
+        try:
+            while True:
+                response = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/grants",
+                    headers={"apikey": SUPABASE_SERVICE_ROLE_KEY, "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}"},
+                    params={"select": "id,title", "order": "first_seen_at.asc", "limit": "1000", "offset": str(len(rows))},
+                    timeout=30,
+                )
+                response.raise_for_status()
+                batch = [r for r in response.json() if r.get("title")]
+                rows.extend(batch)
+                if len(batch) < 1000:
+                    break
+        except Exception as err:
+            print(f"  ! could not load existing opportunities for the duplicate check: {err}")
+        _existing_grants = rows
+    return _existing_grants
+
+
 def save_grant(fields: dict, post: dict) -> bool:
     """Upsert one extracted opportunity into `grants`, flagged as LinkedIn-sourced
     and priority so it sorts to the top of the Grant Scanner.
@@ -543,6 +574,11 @@ def save_grant(fields: dict, post: dict) -> bool:
     application_url = post["post_url"]
     title = str(fields.get("title") or "").strip()
     if not title:
+        return False
+
+    hit = find_similar_title(title, _existing())
+    if hit:
+        print(f"    - already in the Grant Scanner ({hit[2]}): {title}  =  {hit[0]['title']}")
         return False
 
     # Deterministic backstop: don't trust Groq's own "has this passed?"
@@ -597,6 +633,7 @@ def save_grant(fields: dict, post: dict) -> bool:
     if not response.ok:
         print(f"    ! saving grant failed ({response.status_code}): {response.text[:300]}")
         return False
+    _existing().append({"id": None, "title": title})
     print(f"    + {title}"
           + (f"  (deadline {fields['deadline']})" if fields.get("deadline") else ""))
     return True

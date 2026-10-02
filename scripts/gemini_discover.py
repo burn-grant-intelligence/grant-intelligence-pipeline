@@ -30,6 +30,8 @@ from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
 
+from title_similarity import find_similar_title
+
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
@@ -111,6 +113,54 @@ AWARD_THEMES = [
     if isinstance(theme, str) and theme.strip()
 ]
 
+# BURN's longlist of funding & procurement sources (config/funding_sources.yaml).
+# Too many to read every run, so each run reads a rotating batch — see
+# rotating_source_batch(). Optional file: the run works without it.
+try:
+    _funding_config = _load_yaml("funding_sources.yaml")
+except FileNotFoundError:
+    _funding_config = {}
+FUNDING_SOURCES = [
+    {
+        "name": str(s["name"]).strip(),
+        "url": str(s["url"]).strip(),
+        "priority": int(s.get("priority") or 3),
+    }
+    for s in (_funding_config.get("sources") or [])
+    if isinstance(s, dict) and s.get("name") and s.get("url")
+]
+FUNDERS_TO_WATCH = [
+    str(f).strip() for f in (_funding_config.get("funders_to_watch") or []) if str(f).strip()
+]
+SOURCES_P1_PER_RUN = int(os.environ.get("SOURCES_P1_PER_RUN", "10"))
+SOURCES_OTHER_PER_RUN = int(os.environ.get("SOURCES_OTHER_PER_RUN", "6"))
+# Runs are Tuesdays and Fridays (gemini-discover.yml); counting runs from a
+# fixed Tuesday makes each run pick up where the previous one stopped.
+_ROTATION_START = datetime(2026, 1, 6, tzinfo=timezone.utc).date()  # a Tuesday
+
+
+def run_number(today=None) -> int:
+    days = ((today or TODAY) - _ROTATION_START).days
+    return (days // 7) * 2 + (1 if days % 7 >= 3 else 0)
+
+
+def _rotate(items: list, count: int, run: int) -> list:
+    if not items or count <= 0:
+        return []
+    count = min(count, len(items))
+    start = (run * count) % len(items)
+    return [items[(start + i) % len(items)] for i in range(count)]
+
+
+def rotating_source_batch(today=None) -> list[dict]:
+    """This run's share of the longlist: SOURCES_P1_PER_RUN priority-1 pages
+    and SOURCES_OTHER_PER_RUN priority-2/3 pages, continuing from last run."""
+    run = run_number(today)
+    p1 = [s for s in FUNDING_SOURCES if s["priority"] <= 1]
+    rest = [s for s in FUNDING_SOURCES if s["priority"] > 1]
+    return _rotate(p1, SOURCES_P1_PER_RUN, run) + _rotate(rest, SOURCES_OTHER_PER_RUN, run)
+
+
 _taxonomy = _load_yaml("taxonomy.yaml")
 PRIMARY_EVENT_TOPICS = _taxonomy.get("primary_topics") or []
 SECONDARY_EVENT_TOPICS = _taxonomy.get("secondary_topics") or []
@@ -163,6 +213,10 @@ _PROMPT_VALUES = {
     "fixed_event_sources": "\n".join(
         f"- {source['title']}: {source['url']}" for source in FIXED_EVENT_SOURCES
     ),
+    "funder_watchlist": "\n".join(
+        f"- {name}"
+        for name in dict.fromkeys(FUNDERS_TO_WATCH + [s["name"].split(" — ")[0] for s in FUNDING_SOURCES])
+    ) or "- (none listed)",
 }
 
 OPPORTUNITY_DISCOVERY_PROMPT = render_prompt(PROMPTS["opportunity_discovery"], **_PROMPT_VALUES)
@@ -439,6 +493,90 @@ def _remember_title(table: str, title: str) -> None:
     _seen_loose_title_keys.setdefault(table, set()).add(_loose_title_key(title))
 
 
+# Opportunities already in the Grant Scanner (discarded ones included, so a
+# discarded call never comes back under new wording). A new title counts as
+# the same opportunity when ~75% of its wording matches an existing one —
+# "Call for Solutions Horizon Europe EU 2027" = "EU 2027 Call for Solutions" —
+# unless the years/rounds or the countries differ (scripts/title_similarity.py,
+# shared with the app and the daily scan). Loaded once per run.
+_existing_grants: list[dict] | None = None
+
+
+def _load_existing_grants() -> list[dict]:
+    global _existing_grants
+    if _existing_grants is not None:
+        return _existing_grants
+    rows: list[dict] = []
+    page = 1000
+    try:
+        while True:
+            response = requests.get(
+                f"{SUPABASE_URL}/rest/v1/grants",
+                headers={
+                    "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                },
+                params={"select": "id,title", "order": "first_seen_at.asc", "limit": str(page), "offset": str(len(rows))},
+                timeout=30,
+            )
+            response.raise_for_status()
+            batch = [r for r in response.json() if r.get("title")]
+            rows.extend(batch)
+            if len(batch) < page:
+                break
+    except Exception as err:
+        print(f"  ! could not load existing opportunities for the duplicate check: {err}")
+    _existing_grants = rows
+    return rows
+
+
+def find_existing_grant(title: str) -> tuple[dict, float, str] | None:
+    """The opportunity already saved that this title is a duplicate of, as
+    (row, score, reason), or None."""
+    return find_similar_title(title, _load_existing_grants())
+
+
+def _remember_grant(row_id: str | None, title: str) -> None:
+    _load_existing_grants().append({"id": row_id, "title": title})
+
+
+def _touch_grant(row_id: str | None) -> None:
+    """Re-found an opportunity we already have: just note that it was seen
+    again. Its title, first_seen_at (so it is not shown as New again) and
+    discarded flag are left alone."""
+    if not row_id:
+        return
+    try:
+        requests.patch(
+            f"{SUPABASE_URL}/rest/v1/grants",
+            headers={
+                "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+                "Content-Type": "application/json",
+            },
+            params={"id": f"eq.{row_id}"},
+            json={"last_seen_at": datetime.now(timezone.utc).isoformat()},
+            timeout=30,
+        )
+    except Exception as err:
+        print(f"    ! could not refresh the existing opportunity: {err}")
+
+
+def drop_known_candidates(candidates: list[dict]) -> list[dict]:
+    """Search candidates whose title matches an opportunity we already have
+    are dropped before spending a Gemini call reading them."""
+    kept = []
+    for c in candidates:
+        if c.get("kind", "opportunity") in ("opportunity", "award"):
+            hit = find_existing_grant(c["title"])
+            if hit:
+                print(f"  - already in the Grant Scanner ({hit[2]}): {c['title'][:70]}  =  {hit[0]['title'][:70]}")
+                _touch_grant(hit[0].get("id"))
+                continue
+        kept.append(c)
+    return kept
+
+
 # Second, fuzzier duplicate check for events only. The loose title key above
 # misses the same event saved under different wordings — seen in practice
 # with "Carbon Markets Africa Summit" vs "Carbon Markets Africa Summit (CMAS)
@@ -547,10 +685,19 @@ def save_opportunity(fields: dict, candidate: dict, extra: dict | None = None, l
     if not title:
         return False
 
-    if _is_duplicate_title("grants", title):
-        print(
-            f"    - skipped (looks like a duplicate already saved, under a different title): {title}"
-        )
+    hit = find_existing_grant(title)
+    if hit:
+        row, _score, reason = hit
+        print(f"    - already in the Grant Scanner ({reason}): {title}  =  {row['title']}")
+        _touch_grant(row.get("id"))
+        return False
+
+    # Only calls that are open for applying right now. The extraction prompt
+    # sets call_status; an ongoing programme with no open call, a forthcoming
+    # round or a closed one is not an opportunity.
+    status = str(fields.get("call_status") or "").strip().lower()
+    if status and status != "open":
+        print(f"    - skipped (call status \"{status}\", not open for applications): {title}")
         return False
 
     application_url = fields.get("application_url") or candidate["url"]
@@ -606,7 +753,8 @@ def save_opportunity(fields: dict, candidate: dict, extra: dict | None = None, l
             f"    ! saving opportunity failed ({response.status_code}): {response.text[:300]}"
         )
         return False
-    _remember_title("grants", title)
+    saved_rows = response.json() if response.content else []
+    _remember_grant(saved_rows[0].get("id") if saved_rows and isinstance(saved_rows, list) else None, title)
     print(
         f"    + [{label}] {title}"
         + (f"  (deadline {fields['deadline']})" if fields.get("deadline") else "")
@@ -1014,10 +1162,10 @@ def discover_awards() -> list[dict]:
         batch = _discover(prompt, "award", MAX_AWARDS_PER_THEME)
         print(f"  theme \"{theme[:60]}\": {len(batch)} candidate(s)")
         for c in batch:
-            keys = {c["url"].rstrip("/").lower(), _loose_title_key(c["title"])}
-            if keys & seen_keys:
+            url_key = c["url"].rstrip("/").lower()
+            if url_key in seen_keys or find_similar_title(c["title"], found):
                 continue
-            seen_keys |= keys
+            seen_keys.add(url_key)
             found.append(c)
     return found[:MAX_AWARDS_PER_RUN]
 
@@ -1100,6 +1248,7 @@ def run_awards() -> None:
             and c["url"].rstrip("/").lower() not in fixed_urls
             and not looks_like_winners_announcement(c["title"])
         ]
+        fresh = drop_known_candidates(fresh)
         print(f"{len(fresh)} new candidate(s) to read ({len(candidates) - len(fresh)} seen before)")
 
     for candidate in fresh:
@@ -1148,6 +1297,21 @@ def main(argv: list[str] | None = None) -> None:
                     saved_opportunities += 1
             time.sleep(GEMINI_PACING_SECONDS)
 
+    # BURN's longlist (config/funding_sources.yaml): a rotating batch per run.
+    batch = rotating_source_batch()
+    if batch:
+        print(f"\nReading {len(batch)} page(s) from the funding-sources longlist (run #{run_number()})")
+        for source in batch:
+            page = {"title": f"Open calls for proposals, RFPs, tenders or funding rounds listed on {source['name']}", "url": source["url"]}
+            print(f"  → [longlist P{source['priority']}] {source['name'][:70]}")
+            fields_list = extract_opportunity(page)
+            if not fields_list:
+                print("    - nothing open right now; skipped")
+            for fields in fields_list:
+                if save_opportunity(fields, page):
+                    saved_opportunities += 1
+            time.sleep(GEMINI_PACING_SECONDS)
+
     # Fixed event sources: known events-listing pages checked on every run —
     # see FIXED_EVENT_SOURCES above for why these bypass seen_urls() too.
     if FIXED_EVENT_SOURCES:
@@ -1168,7 +1332,7 @@ def main(argv: list[str] | None = None) -> None:
     fresh = []
     if candidates:
         already = seen_urls([c["url"] for c in candidates])
-        fresh = [c for c in candidates if c["url"] not in already]
+        fresh = drop_known_candidates([c for c in candidates if c["url"] not in already])
         print(
             f"{len(fresh)} new candidate(s) to extract ({len(candidates) - len(fresh)} seen before)"
         )

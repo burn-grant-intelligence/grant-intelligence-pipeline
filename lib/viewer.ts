@@ -1,7 +1,7 @@
 "use client";
 
 // "Viewing as" — who is using the app on this browser (there are no logins).
-// Shared by the Application Tracker, Draft Application and the header bell,
+// Shared by the Application Tracker and Draft Application,
 // so picking your name in one place applies everywhere, including other tabs.
 // Same storage key the tabs used before, so nobody has to pick again.
 

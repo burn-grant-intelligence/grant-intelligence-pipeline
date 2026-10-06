@@ -1,73 +1,141 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import * as XLSX from "xlsx";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { ApplicantType, EligibilityVerdict, FitStatus, Grant, TrackerItem } from "@/lib/types";
-import type { EligibilityReport, RuleResult } from "@/lib/eligibility/types";
+import { ActionItem, Grant, OpportunityNote, TRACKER_STATUSES, TrackerItem, TrackerStatus } from "@/lib/types";
+import OpportunityBreakdown from "@/components/OpportunityBreakdown";
+import TeamInbox from "@/components/TeamInbox";
+import { LEADS, canonicalLead, categoryLabel, fmtDate, statusLabel } from "@/lib/pipeline";
+import { isLive, removeOpportunity, restoreOpportunity } from "@/lib/collab";
+import { setViewer, useViewer } from "@/lib/viewer";
+import { KIND_BADGE, kindOf } from "@/lib/opportunityType";
+import { findSimilarTitle } from "@/lib/titleSimilarity";
 
-const FIT_LABELS: Record<FitStatus, string> = {
-  unreviewed: "Unreviewed",
-  fit: "Fit",
-  not_fit: "Not fit",
+const STATUS_LABELS: Record<TrackerStatus, string> = {
+  tracking: "Tracking",
+  researching: "Researching",
+  drafting: "Drafting",
+  submitted: "Submitted",
+  won: "Won",
+  implementation: "Implementation",
+  lost: "Lost",
 };
 
-const APPLICANT_TYPE_LABELS: Record<ApplicantType, string> = {
-  single: "Single applicant",
-  consortium: "Consortium",
-  either: "Either",
-  unclear: "Unclear",
-};
+// The three "still in the pipeline" statuses that roll up into the
+// "In progress" stat tile and filter.
+const IN_PROGRESS_STATUSES: TrackerStatus[] = ["tracking", "researching", "drafting"];
 
-// Quick-access button, same idea as QUICK_LINKS in ManagementDashboard.tsx.
-// Paste the SharePoint grants-folder link between the quotes on the next line;
-// the "Grants Folder" button only shows once a link is set.
-const GRANTS_FOLDER_URL = "https://burn.sharepoint.com/sites/BurnMFG_Main_Site2/3GA_General_and_Admin/Shared%20Documents/Forms/AllItems.aspx?d=w0143488dc9a54b0b96b79d993d48667f&csf=1&web=1&e=kmJNOx&ovuser=5b303516%2Df2b1%2D4ff6%2D96ad%2D5945b63736b1%2Cbornventure%2Ekinoti%40burnmfg%2Ecom&TeamsCID=936d8908%2Da474%2D4641%2D93c2%2D1f2a2910bdbd&OR=Teams%2DHL&CT=1790777568310&clickparams=eyJBcHBOYW1lIjoiVGVhbXMtV2ViIiwiQXBwVmVyc2lvbiI6IjE0MTUvMjYwOTAzMTU4MjAiLCJIYXNGZWRlcmF0ZWRVc2VyIjpmYWxzZX0%3D&CID=604d40a2%2D20a8%2Dc000%2D24e3%2D84b8bf90e399&cidOR=SPO&FolderCTID=0x012000D3838D15058D3640BED1BFABA1194795&id=%2Fsites%2FBurnMFG%5FMain%5FSite2%2F3GA%5FGeneral%5Fand%5FAdmin%2FShared%20Documents%2F31GA%5FCEO%5FOffice%2F31GA%2D06%5FGrants";
+// "removed": opportunities taken out with "Remove & discard" (they can be restored).
+type StatusFilter = TrackerStatus | "all" | "in_progress" | "removed";
 
-// What the eligibility engine concluded about the opportunity (rules against
-// BURN's profile). "Needs review" is a verdict, not a Fit status: it leaves
-// the item Unreviewed until someone decides.
-const VERDICT_LABELS: Record<EligibilityVerdict, string> = {
-  fit: "Fit",
-  not_fit: "Not a fit",
-  needs_review: "Needs further review",
-};
+// "Viewing as" is remembered per browser (no logins in this app): lib/viewer.ts.
 
-const VERDICT_STYLES: Record<EligibilityVerdict, string> = {
-  fit: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  not_fit: "border-red-200 bg-red-50 text-red-800",
-  needs_review: "border-amber-200 bg-amber-50 text-amber-800",
-};
-
-type FitFilter = FitStatus | "all" | "needs_review";
-
-// Everything a row needs to show for "Supporting Docs" — a named list when
-// Gemini could enumerate documents, or a single RFP/call-page link when it
-// couldn't (per the "if it can't get the list, at least link the RFP"
-// requirement this tab was built around). Never both blank if a source link
-// exists on the grant at all.
-function docsSummaryForExport(grant: Grant | null): string {
-  if (!grant) return "";
-  if (grant.supporting_docs && grant.supporting_docs.length > 0) {
-    return grant.supporting_docs.map((d) => d.name).join(", ");
-  }
-  if (grant.rfp_url) return `RFP: ${grant.rfp_url}`;
-  return grant.eligibility_checked_at ? "None listed" : "Not checked yet";
+function formatMoney(amount: number, currency?: string | null) {
+  return `${currency ?? "USD"} ${amount.toLocaleString()}`;
 }
 
-export default function EligibilityTracker() {
+export default function ApplicationTracker() {
   const [items, setItems] = useState<TrackerItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [fitFilter, setFitFilter] = useState<FitFilter>("all");
-  const [checkingGrantId, setCheckingGrantId] = useState<string | null>(null);
-  // "Paste the call text" fallback: which cards have the box open, and what is typed in it.
-  const [pasteOpen, setPasteOpen] = useState<Record<string, boolean>>({});
-  const [pasteDrafts, setPasteDrafts] = useState<Record<string, string>>({});
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [addingManual, setAddingManual] = useState(false);
+  const [manualTitle, setManualTitle] = useState("");
+  const [manualUrl, setManualUrl] = useState("");
+  const [manualDeadline, setManualDeadline] = useState("");
+  const [manualAmount, setManualAmount] = useState("");
+  const [manualSource, setManualSource] = useState("");
+  const [manualNotes, setManualNotes] = useState("");
+  // Breakdown panel, meeting notes and action points (Opportunity Pipeline, 2026-10-01).
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [notes, setNotes] = useState<OpportunityNote[]>([]);
+  const [actions, setActions] = useState<ActionItem[]>([]);
+  const [notesError, setNotesError] = useState<string | null>(null);
+  const viewer = useViewer();
+  // "Remove & discard": the card being removed, and the reason typed.
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [removeReason, setRemoveReason] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
+    loadNotesAndActions();
   }, []);
+
+  const reloadActions = useCallback(async () => {
+    const { data, error: e } = await supabase.from("action_items").select("*").order("created_at", { ascending: true });
+    if (!e) setActions((data as ActionItem[]) ?? []);
+  }, []);
+
+  async function loadNotesAndActions() {
+    const [n, a] = await Promise.all([
+      supabase.from("opportunity_notes").select("*").order("meeting_date", { ascending: false }),
+      supabase.from("action_items").select("*").order("created_at", { ascending: true }),
+    ]);
+    const err = n.error ?? a.error;
+    setNotesError(
+      err
+        ? "Meeting notes and action points aren't available yet — run supabase/opportunity_pipeline_migration_2026-10-01.sql in Supabase."
+        : null
+    );
+    setNotes((n.data as OpportunityNote[]) ?? []);
+    setActions((a.data as ActionItem[]) ?? []);
+  }
+
+  const chooseViewer = (name: string) => setViewer(name || null);
+
+  async function toggleActionDone(a: ActionItem) {
+    const patch = { done: !a.done, done_at: !a.done ? new Date().toISOString() : null };
+    const { error: e } = await supabase.from("action_items").update(patch).eq("id", a.id);
+    if (e) return setNotesError(e.message);
+    setActions((prev) => prev.map((x) => (x.id === a.id ? { ...x, ...patch } : x)));
+  }
+
+  function openOpportunity(trackerItemId: string, anchorId?: string) {
+    setStatusFilter("all");
+    setExpandedId(trackerItemId);
+    setTimeout(() => {
+      const target = (anchorId && document.getElementById(anchorId)) || document.getElementById(`opp-${trackerItemId}`);
+      target?.scrollIntoView({ behavior: "smooth", block: anchorId ? "center" : "start" });
+      if (anchorId && target) {
+        target.classList.add("ring-2", "ring-[var(--accent)]");
+        setTimeout(() => target.classList.remove("ring-2", "ring-[var(--accent)]"), 2500);
+      }
+    }, 150);
+  }
+
+  // Remove & discard: hidden in every tab (Tracker, Eligibility, Draft
+  // Application, Management Dashboard) and discarded in the Grant Scanner.
+  // Nothing is deleted — "Removed" lists it with a Restore button.
+  async function confirmRemove(item: TrackerItem) {
+    setBusyId(item.id);
+    setNotice(null);
+    const title = item.grant?.title ?? "this opportunity";
+    const err = await removeOpportunity(item, viewer, removeReason.trim() || null, title);
+    setBusyId(null);
+    if (err && !/team_notifications/i.test(err)) return setError(err);
+    const now = new Date().toISOString();
+    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, removed_at: now, removed_by: viewer, removed_reason: removeReason.trim() || null } : i)));
+    setRemovingId(null);
+    setRemoveReason("");
+    if (expandedId === item.id) setExpandedId(null);
+    setNotice(`Removed "${title}" from every tab and discarded it in the Grant Scanner. Find it under “Removed” to restore it.`);
+  }
+
+  async function restore(item: TrackerItem) {
+    setBusyId(item.id);
+    const err = await restoreOpportunity(item);
+    setBusyId(null);
+    if (err) return setError(err);
+    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, removed_at: null, removed_by: null, removed_reason: null } : i)));
+    setNotice(`Restored "${item.grant?.title ?? "the opportunity"}" — it is back in every tab.`);
+  }
+
+  const patchItem = (id: string, patch: Partial<TrackerItem>) =>
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)));
+  const patchGrant = (id: string, patch: Partial<Grant>) =>
+    setItems((prev) => prev.map((i) => (i.id === id && i.grant ? { ...i, grant: { ...i.grant, ...patch } } : i)));
 
   async function loadData() {
     setLoading(true);
@@ -77,186 +145,354 @@ export default function EligibilityTracker() {
       .select("*, grant:grants(*)")
       .order("updated_at", { ascending: false });
     if (fetchError) setError(fetchError.message);
-    // "Remove & discard" in the Application Tracker hides an opportunity everywhere.
-    setItems(((data as unknown as TrackerItem[]) ?? []).filter((i) => !i.removed_at));
+    setItems((data as unknown as TrackerItem[]) ?? []);
     setLoading(false);
   }
 
+  const liveItems = useMemo(() => items.filter(isLive), [items]);
+  const removedItems = useMemo(() => items.filter((i) => !isLive(i)), [items]);
+
   const counts = useMemo(() => {
-    const base = { all: items.length, unreviewed: 0, fit: 0, not_fit: 0, needs_review: 0 };
-    for (const item of items) {
-      const status = item.fit_status ?? "unreviewed";
-      base[status]++;
-      if (status === "unreviewed" && item.grant?.eligibility_verdict === "needs_review") base.needs_review++;
+    const base = {
+      total: liveItems.length,
+      in_progress: 0,
+      submitted: 0,
+      won: 0,
+      wonValue: 0,
+      implementation: 0,
+      implementationValue: 0,
+    };
+    for (const item of liveItems) {
+      if (IN_PROGRESS_STATUSES.includes(item.status)) base.in_progress++;
+      if (item.status === "submitted") base.submitted++;
+      if (item.status === "won") {
+        base.won++;
+        base.wonValue += item.grant?.amount ?? 0;
+      }
+      if (item.status === "implementation") {
+        base.implementation++;
+        base.implementationValue += item.grant?.amount ?? 0;
+      }
     }
     return base;
-  }, [items]);
+  }, [liveItems]);
 
-  const filteredItems = useMemo(
-    () =>
-      fitFilter === "all"
-        ? items
-        : fitFilter === "needs_review"
-        ? items.filter(
-            (i) => (i.fit_status ?? "unreviewed") === "unreviewed" && i.grant?.eligibility_verdict === "needs_review"
-          )
-        : items.filter((i) => (i.fit_status ?? "unreviewed") === fitFilter),
-    [items, fitFilter]
-  );
-
-  // A person's Fit / Not fit choice is marked fit_source "manual" so a later
-  // "Re-check eligibility" never overwrites it; picking "Unreviewed" hands the
-  // decision back to the eligibility check (fit_source cleared).
-  async function updateFit(trackerItemId: string, fit_status: FitStatus) {
-    const fit_source = fit_status === "unreviewed" ? null : "manual";
-    const { error: updateError } = await supabase
-      .from("tracker_items")
-      .update({ fit_status, fit_source, updated_at: new Date().toISOString() })
-      .eq("id", trackerItemId);
-    if (updateError) {
-      setError(updateError.message);
-      return;
+  const filteredItems = useMemo(() => {
+    if (statusFilter === "removed") return removedItems;
+    if (statusFilter === "all") return liveItems;
+    if (statusFilter === "in_progress") {
+      return liveItems.filter((i) => IN_PROGRESS_STATUSES.includes(i.status));
     }
-    setItems((prev) => prev.map((i) => (i.id === trackerItemId ? { ...i, fit_status, fit_source } : i)));
-  }
+    return liveItems.filter((i) => i.status === statusFilter);
+  }, [liveItems, removedItems, statusFilter]);
 
-  async function updateFitNotes(trackerItemId: string, fit_notes: string) {
+  async function updateStatus(id: string, status: TrackerStatus) {
     const { error: updateError } = await supabase
       .from("tracker_items")
-      .update({ fit_notes: fit_notes || null })
-      .eq("id", trackerItemId);
-    if (updateError) setError(updateError.message);
-  }
-
-  // Manual escape hatch (supabase/draft_override_migration_2026-09-25.sql):
-  // Draft Application's query only shows fit_status === "fit" items by
-  // default (see DraftApplication.tsx's loadData). This lets someone force
-  // a specific unreviewed/not-fit item in there anyway, without touching
-  // fit_status/fit_notes — the eligibility verdict itself stays intact and
-  // visible, only where the item is allowed to show changes.
-  async function updateDraftOverride(trackerItemId: string, draft_override: boolean) {
-    const { error: updateError } = await supabase
-      .from("tracker_items")
-      .update({ draft_override, updated_at: new Date().toISOString() })
-      .eq("id", trackerItemId);
-    if (updateError) {
-      setError(updateError.message);
-      return;
+      .update({ status, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    if (!updateError) {
+      setItems((prev) => prev.map((i) => (i.id === id ? { ...i, status } : i)));
     }
-    setItems((prev) =>
-      prev.map((i) => (i.id === trackerItemId ? { ...i, draft_override } : i))
-    );
   }
 
-  async function checkEligibility(grantId: string, itemId?: string, pastedText?: string) {
-    setCheckingGrantId(grantId);
+  // Mirrors the SQL that generates grants.title_key in
+  // supabase/dedup_migration.sql: lowercase, then drop everything that isn't
+  // a letter or digit. Keep the two in sync — if the SQL normalisation ever
+  // changes, this must change with it.
+  function titleKeyOf(title: string) {
+    return title.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  }
+
+  function resetManualForm() {
+    setManualTitle("");
+    setManualUrl("");
+    setManualDeadline("");
+    setManualAmount("");
+    setManualSource("");
+    setManualNotes("");
+    setAddingManual(false);
+  }
+
+  async function addManualGrant() {
+    const title = manualTitle.trim();
+    if (!title) return;
     setError(null);
-    try {
-      const res = await fetch("/api/check-eligibility", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(pastedText ? { grantId, pastedText } : { grantId }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        setError(json.error ?? "Eligibility check failed.");
-        // Offer the paste-the-text fallback on the card that failed.
-        if (itemId) setPasteOpen((prev) => ({ ...prev, [itemId]: true }));
+
+    let amount: number | null = null;
+    if (manualAmount.trim()) {
+      amount = Number(manualAmount.trim());
+      if (Number.isNaN(amount)) {
+        setError("Grant size must be a number.");
         return;
       }
-      // The route returns { grant: <columns written onto the grant>, tracker:
-      // <fit_status/fit_source/fit_notes it was allowed to set, per tracker item> }.
-      const trackerById = new Map<string, { fit_status: FitStatus; fit_source: "auto" | null; fit_notes: string | null }>(
-        (json.tracker ?? []).map((t: { id: string }) => [t.id, t])
-      );
-      setItems((prev) =>
-        prev.map((item) => {
-          const trackerChange = trackerById.get(item.id);
-          if (item.grant?.id === grantId) {
-            return { ...item, ...(trackerChange ?? {}), grant: { ...item.grant!, ...json.grant } };
-          }
-          return trackerChange ? { ...item, ...trackerChange } : item;
-        })
-      );
-    } catch {
-      setError("Could not reach the eligibility check endpoint. Is the app deployed with GEMINI_API_KEY set?");
-      if (itemId) setPasteOpen((prev) => ({ ...prev, [itemId]: true }));
-    } finally {
-      setCheckingGrantId(null);
     }
-  }
 
-  function exportToExcel() {
-    const rows = filteredItems.map((item) => ({
-      Opportunity: item.grant?.title ?? "(untitled grant)",
-      Donor: item.grant?.funder ?? "",
-      "Countries of Focus": item.grant?.eligible_countries?.join(", ") ?? "",
-      Sector: item.grant?.focus_areas?.join(", ") ?? "",
-      "Single / Consortium": APPLICANT_TYPE_LABELS[item.grant?.applicant_type ?? "unclear"],
-      "Supporting Docs": docsSummaryForExport(item.grant ?? null),
-      Fit: FIT_LABELS[item.fit_status ?? "unreviewed"],
-      "Eligibility check": item.grant?.eligibility_verdict ? VERDICT_LABELS[item.grant.eligibility_verdict] : "",
-      "Check summary": item.grant?.eligibility_report?.summary ?? "",
-    }));
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    worksheet["!cols"] = [
-      { wch: 40 },
-      { wch: 22 },
-      { wch: 28 },
-      { wch: 24 },
-      { wch: 18 },
-      { wch: 40 },
-      { wch: 12 },
-      { wch: 18 },
-      { wch: 60 },
-    ];
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Eligibility Tracker");
-    XLSX.writeFile(workbook, `eligibility-tracker-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    // Only the fields the user actually filled in — so enriching an
+    // already-discovered grant (see below) never blanks out data the
+    // scanner already captured.
+    const grantFields: Record<string, unknown> = {};
+    if (manualUrl.trim()) grantFields.application_url = manualUrl.trim();
+    if (manualDeadline) grantFields.deadline = manualDeadline;
+    if (amount !== null) {
+      grantFields.amount = amount;
+      grantFields.currency = "USD";
+    }
+    if (manualSource.trim()) grantFields.source_note = manualSource.trim();
+
+    // grants.title_key has a unique index, so a plain insert would throw if
+    // this title already exists (e.g. the scanner already found it). Look
+    // for that existing row first and just track it (enriching it with
+    // whatever this form captured), rather than erroring or creating the
+    // duplicate the index is there to prevent.
+    const { data: existing, error: lookupError } = await supabase
+      .from("grants")
+      .select("id")
+      .eq("title_key", titleKeyOf(title))
+      .maybeSingle();
+    if (lookupError) {
+      setError(lookupError.message);
+      return;
+    }
+
+    let grantId = existing?.id as string | undefined;
+
+    // Not the exact title? Look for the same opportunity worded differently
+    // (~75% of the title the same — lib/titleSimilarity.ts), so "EU 2027 Call
+    // for Solutions" attaches to "Call for Solutions Horizon Europe EU 2027".
+    if (!grantId) {
+      const { data: all } = await supabase.from("grants").select("id, title").order("first_seen_at", { ascending: false }).limit(2000);
+      const similar = findSimilarTitle(title, (all ?? []) as { id: string; title: string | null }[]);
+      if (similar) grantId = similar.match.id;
+    }
+
+    // Each opportunity is tracked once: if it is already in the tracker, say so.
+    // If it was removed, bring it back instead.
+    if (grantId) {
+      const already = items.find((i) => i.grant_id === grantId);
+      if (already && !isLive(already)) {
+        await restore(already);
+        resetManualForm();
+        setExpandedId(already.id);
+        return;
+      }
+      const { data: trackedRows } = already ? { data: [already] } : await supabase.from("tracker_items").select("id").eq("grant_id", grantId).limit(1);
+      if (trackedRows && trackedRows.length) {
+        const name = already?.grant?.title ?? "this opportunity";
+        setError(`Already tracked: "${name}" is in the tracker${already?.owner ? ` (lead: ${already.owner})` : ""}. Each opportunity is tracked once — add your notes to it instead.`);
+        if (already) setExpandedId(already.id);
+        return;
+      }
+    }
+
+    if (grantId) {
+      if (Object.keys(grantFields).length > 0) {
+        const { error: enrichError } = await supabase
+          .from("grants")
+          .update(grantFields)
+          .eq("id", grantId);
+        if (enrichError) {
+          setError(enrichError.message);
+          return;
+        }
+      }
+    } else {
+      const { data: grantRow, error: grantError } = await supabase
+        .from("grants")
+        .insert({
+          title,
+          content_hash: `manual-${Date.now()}-${title.toLowerCase()}`,
+          ...grantFields,
+        })
+        .select("id")
+        .single();
+      if (grantError || !grantRow) {
+        setError(grantError?.message ?? "Could not add that grant.");
+        return;
+      }
+      grantId = grantRow.id;
+    }
+
+    const { error: trackerError } = await supabase.from("tracker_items").insert({
+      grant_id: grantId,
+      status: "tracking",
+      notes: manualNotes.trim() || null,
+    });
+    if (trackerError) {
+      setError(trackerError.code === "23505" ? "Already tracked — each opportunity is tracked once. Refresh to see it." : trackerError.message);
+      return;
+    }
+    resetManualForm();
+    loadData();
   }
 
   return (
     <div className="flex flex-col gap-6">
-      <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
-        <h2 className="text-lg font-semibold text-[var(--ink)]">Eligibility Tracker</h2>
-        {GRANTS_FOLDER_URL && (
-          <a
-            href={GRANTS_FOLDER_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
-          >
-            📁 Grants Folder
-          </a>
-        )}
-      </section>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white px-4 py-3">
+        <label className="flex items-center gap-2 text-sm text-neutral-600">
+          Viewing as
+          <select value={viewer ?? ""} onChange={(e) => chooseViewer(e.target.value)} className="rounded-md border border-neutral-300 px-2 py-1 text-sm text-neutral-800">
+            <option value="">Choose your name…</option>
+            {LEADS.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="text-xs text-neutral-400">Tag teammates by typing their name in notes, action points and replies.</p>
+      </div>
+
+      <TeamInbox
+        viewer={viewer}
+        items={items}
+        actions={actions}
+        onToggleAction={toggleActionDone}
+        onOpen={openOpportunity}
+        onRefresh={reloadActions}
+      />
+
+      {notice && (
+        <div className="flex items-start justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+          {notice}
+          <button onClick={() => setNotice(null)} className="text-emerald-700 hover:text-emerald-900" aria-label="Dismiss">✕</button>
+        </div>
+      )}
+
+      {notesError && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{notesError}</div>
+      )}
+
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        <StatTile
+          label="Total tracked"
+          value={counts.total}
+          color="text-neutral-800"
+          active={statusFilter === "all"}
+          onClick={() => setStatusFilter("all")}
+        />
+        <StatTile
+          label="In progress"
+          value={counts.in_progress}
+          color="text-neutral-800"
+          active={statusFilter === "in_progress"}
+          onClick={() => setStatusFilter("in_progress")}
+        />
+        <StatTile
+          label="Submitted"
+          value={counts.submitted}
+          color="text-neutral-800"
+          active={statusFilter === "submitted"}
+          onClick={() => setStatusFilter("submitted")}
+        />
+        <StatTile
+          label="Won 🎉"
+          value={counts.won}
+          color="text-emerald-600"
+          subtitle={counts.wonValue > 0 ? formatMoney(counts.wonValue) : undefined}
+          active={statusFilter === "won"}
+          onClick={() => setStatusFilter("won")}
+        />
+        <StatTile
+          label="Implementation"
+          value={counts.implementation}
+          color="text-blue-600"
+          subtitle={counts.implementationValue > 0 ? formatMoney(counts.implementationValue) : undefined}
+          active={statusFilter === "implementation"}
+          onClick={() => setStatusFilter("implementation")}
+        />
+      </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
-          <FilterPill active={fitFilter === "all"} onClick={() => setFitFilter("all")}>
-            All ({counts.all})
+          <FilterPill active={statusFilter === "all"} onClick={() => setStatusFilter("all")}>
+            All statuses
           </FilterPill>
-          <FilterPill active={fitFilter === "unreviewed"} onClick={() => setFitFilter("unreviewed")}>
-            Unreviewed ({counts.unreviewed})
-          </FilterPill>
-          <FilterPill active={fitFilter === "needs_review"} onClick={() => setFitFilter("needs_review")}>
-            Needs review ({counts.needs_review})
-          </FilterPill>
-          <FilterPill active={fitFilter === "fit"} onClick={() => setFitFilter("fit")}>
-            Fit ({counts.fit})
-          </FilterPill>
-          <FilterPill active={fitFilter === "not_fit"} onClick={() => setFitFilter("not_fit")}>
-            Not fit ({counts.not_fit})
-          </FilterPill>
+          {TRACKER_STATUSES.map((status) => (
+            <FilterPill
+              key={status}
+              active={statusFilter === status}
+              onClick={() => setStatusFilter(status)}
+            >
+              {STATUS_LABELS[status]}
+            </FilterPill>
+          ))}
+          {removedItems.length > 0 && (
+            <FilterPill active={statusFilter === "removed"} onClick={() => setStatusFilter("removed")}>
+              🗑️ Removed ({removedItems.length})
+            </FilterPill>
+          )}
         </div>
         <button
-          onClick={exportToExcel}
-          disabled={filteredItems.length === 0}
-          className="rounded-md border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={() => (addingManual ? resetManualForm() : setAddingManual(true))}
+          className="rounded-md bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-700"
         >
-          Export to Excel
+          + Add grant
         </button>
       </div>
+
+      {addingManual && (
+        <div className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <input
+              value={manualTitle}
+              onChange={(e) => setManualTitle(e.target.value)}
+              placeholder="Grant / opportunity name *"
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm sm:col-span-2"
+            />
+            <input
+              value={manualUrl}
+              onChange={(e) => setManualUrl(e.target.value)}
+              placeholder="Link to the opportunity"
+              type="url"
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            />
+            <input
+              value={manualDeadline}
+              onChange={(e) => setManualDeadline(e.target.value)}
+              type="date"
+              aria-label="Deadline"
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-600"
+            />
+            <input
+              value={manualAmount}
+              onChange={(e) => setManualAmount(e.target.value)}
+              placeholder="Grant size (USD)"
+              type="number"
+              min="0"
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            />
+            <input
+              value={manualSource}
+              onChange={(e) => setManualSource(e.target.value)}
+              placeholder="Source (how you found this)"
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
+            />
+            <textarea
+              value={manualNotes}
+              onChange={(e) => setManualNotes(e.target.value)}
+              placeholder="Notes"
+              rows={2}
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm sm:col-span-2"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={resetManualForm}
+              className="rounded-md border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={addManualGrant}
+              disabled={!manualTitle.trim()}
+              className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -264,201 +500,172 @@ export default function EligibilityTracker() {
         </div>
       )}
 
-      {!loading && !error && filteredItems.length === 0 && (
+      {!loading && !error && filteredItems.length === 0 && statusFilter !== "removed" && (
         <div className="rounded-lg border border-dashed border-neutral-300 bg-white p-10 text-center text-neutral-500">
-          <p className="mb-1 font-medium text-neutral-700">Nothing here yet</p>
-          <p className="text-sm">Track an opportunity from the Grant Scanner or Application Tracker first.</p>
+          <p className="mb-1 font-medium text-neutral-700">No grants tracked yet</p>
+          <p className="text-sm">
+            Add grants from the scanner, or manually track any opportunity your team is pursuing.
+          </p>
         </div>
       )}
 
       <div className="flex flex-col gap-3">
         {filteredItems.map((item) => {
-          const grant = item.grant;
-          const fitStatus = item.fit_status ?? "unreviewed";
-          const isChecking = checkingGrantId === grant?.id;
-          const hasBeenChecked = !!grant?.eligibility_checked_at;
-          const docs = grant?.supporting_docs ?? [];
-          // The link a check reads: the one a person saved in the Application Tracker
-          // (Breakdown → Link) wins; otherwise the last link a check used, then the scraper's.
-          const savedLink = item.pipeline_link?.trim() || null;
-          const checkLink = savedLink || grant?.rfp_url || grant?.application_url || null;
-          const pastedDraft = pasteDrafts[item.id] ?? "";
-          const showPaste = !!pasteOpen[item.id];
+          const details = [
+            item.grant?.funder,
+            item.grant?.amount ? formatMoney(item.grant.amount, item.grant.currency) : null,
+            item.grant?.deadline ? `Due ${item.grant.deadline}` : null,
+            item.grant?.source_note,
+          ]
+            .filter(Boolean)
+            .join(" · ");
+
+          const expanded = expandedId === item.id;
+          const removed = !isLive(item);
+          const chips = [categoryLabel(item.pipeline_category), statusLabel(item.pipeline_status), canonicalLead(item.owner)].filter(Boolean);
+          const openCount = actions.filter((a) => a.tracker_item_id === item.id && !a.done).length;
 
           return (
-            <div
-              key={item.id}
-              className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4"
-            >
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
+            <div key={item.id} id={`opp-${item.id}`} className="flex flex-col gap-3 rounded-lg border border-neutral-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                {item.pipeline_link?.trim() || item.grant?.application_url ? (
+                  <a
+                    href={item.pipeline_link?.trim() || item.grant?.application_url || undefined}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-neutral-800 underline decoration-neutral-300 underline-offset-2 hover:text-[var(--accent)]"
+                  >
+                    {item.grant?.title ?? "(untitled grant)"}
+                  </a>
+                ) : (
                   <p className="font-medium text-neutral-800">
-                    {grant?.title ?? "(untitled grant)"}
+                    {item.grant?.title ?? "(untitled grant)"}
                   </p>
-                  <p className="text-sm text-neutral-500">
-                    {grant?.funder ?? "Unknown funder"}
-                    {" · "}
-                    <span className="uppercase tracking-wide text-xs">{item.status}</span>
-                  </p>
-                </div>
-                <button
-                  onClick={() => grant?.id && checkEligibility(grant.id, item.id)}
-                  disabled={isChecking || !checkLink}
-                  title={!checkLink ? "No link on file — add one in the Application Tracker (Breakdown → Link) or paste the call text" : undefined}
-                  className="shrink-0 rounded-md border border-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {isChecking ? "Checking…" : hasBeenChecked ? "Re-check eligibility" : "Check eligibility"}
-                </button>
-              </div>
-
-              <div className="flex flex-col gap-2 text-xs text-neutral-500">
-                <p className="break-all">
-                  {checkLink ? (
-                    <>
-                      <span className="font-medium text-neutral-600">
-                        {savedLink ? "Link used (yours, from the Application Tracker): " : "Link used: "}
+                )}
+                <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${KIND_BADGE[kindOf(item.grant)].className}`}>
+                  {KIND_BADGE[kindOf(item.grant)].label}
+                </span>
+                {details && <p className="text-sm text-neutral-500">{details}</p>}
+                {item.notes && <p className="mt-1 text-sm italic text-neutral-500">{item.notes}</p>}
+                {(chips.length > 0 || openCount > 0) && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {chips.map((c) => (
+                      <span key={c} className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-600">
+                        {c}
                       </span>
-                      <a
-                        href={checkLink}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="underline decoration-neutral-300 hover:text-[var(--accent)]"
-                      >
-                        {checkLink}
-                      </a>
-                    </>
-                  ) : (
-                    "No link on file. Add one in the Application Tracker (open Breakdown → Link), or paste the call text below."
-                  )}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setPasteOpen((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
-                  className="self-start underline decoration-neutral-300 hover:text-[var(--accent)]"
-                >
-                  {showPaste ? "Hide paste box" : "Link not opening? Paste the call text instead"}
-                </button>
-                {showPaste && (
-                  <div className="flex flex-col gap-2">
-                    <textarea
-                      value={pastedDraft}
-                      onChange={(e) => setPasteDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                      rows={6}
-                      placeholder="Open the call page yourself, copy the whole text (eligibility, deadline, prize or funding, how to apply) and paste it here."
-                      className="w-full rounded-md border border-neutral-300 p-2 text-sm text-neutral-800"
-                    />
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() => grant?.id && checkEligibility(grant.id, item.id, pastedDraft)}
-                        disabled={isChecking || pastedDraft.trim().length < 150}
-                        className="rounded-md border border-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        {isChecking ? "Checking…" : "Check this text"}
-                      </button>
-                      <span>
-                        {pastedDraft.trim().length < 150
-                          ? `${pastedDraft.trim().length}/150 characters needed`
-                          : "Your link stays as it is; only this text is read."}
+                    ))}
+                    {openCount > 0 && (
+                      <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-medium text-orange-700">
+                        {openCount} open action point{openCount > 1 ? "s" : ""}
                       </span>
-                    </div>
+                    )}
                   </div>
                 )}
               </div>
-
-              <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-                <Field label="Countries of focus">
-                  {grant?.eligible_countries?.length ? grant.eligible_countries.join(", ") : "—"}
-                </Field>
-                <Field label="Sector">
-                  {grant?.focus_areas?.length ? grant.focus_areas.join(", ") : "—"}
-                </Field>
-                <Field label="Single / consortium">
-                  {APPLICANT_TYPE_LABELS[grant?.applicant_type ?? "unclear"]}
-                </Field>
-                <Field label="Supporting docs">
-                  {docs.length > 0 ? (
-                    <ul className="flex flex-col gap-0.5">
-                      {docs.map((doc, idx) =>
-                        doc.url ? (
-                          <li key={idx}>
-                            <a
-                              href={doc.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="underline decoration-neutral-300 hover:text-[var(--accent)]"
-                            >
-                              {doc.name}
-                            </a>
-                          </li>
-                        ) : (
-                          <li key={idx}>{doc.name}</li>
-                        )
-                      )}
-                    </ul>
-                  ) : grant?.rfp_url ? (
-                    <a
-                      href={grant.rfp_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline decoration-neutral-300 hover:text-[var(--accent)]"
-                    >
-                      RFP / call page link
-                    </a>
-                  ) : (
-                    "—"
-                  )}
-                </Field>
-              </div>
-
-              {grant?.eligibility_report && <VerdictPanel report={grant.eligibility_report} />}
-
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  {(["unreviewed", "fit", "not_fit"] as FitStatus[]).map((status) => (
-                    <FitPill
-                      key={status}
-                      status={status}
-                      active={fitStatus === status}
-                      onClick={() => updateFit(item.id, status)}
-                    />
-                  ))}
-                  {item.fit_source === "auto" && (
-                    <span
-                      title="Set by the eligibility check. Pick Fit / Not fit yourself to override it — a re-check won't change your choice."
-                      className="text-xs text-neutral-400"
-                    >
-                      set automatically
-                    </span>
-                  )}
-                  {/* Only relevant when fit alone wouldn't already let this into Draft
-                      Application — once something's marked Fit it gets there anyway. */}
-                  {fitStatus !== "fit" &&
-                    (item.draft_override ? (
-                      <button
-                        onClick={() => updateDraftOverride(item.id, false)}
-                        title="Showing in Draft Application despite not being marked Fit — click to pull it back out"
-                        className="rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-200"
-                      >
-                        In Draft Application (override) ✕
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => updateDraftOverride(item.id, true)}
-                        title="Skip the Fit requirement and let this show in Draft Application anyway"
-                        className="rounded-full border border-dashed border-neutral-300 px-3 py-1 text-xs font-medium text-neutral-500 hover:border-neutral-400 hover:text-neutral-700"
-                      >
-                        Draft anyway →
-                      </button>
-                    ))}
+              {removed ? (
+                <div className="flex items-center gap-3">
+                  <p className="text-xs text-neutral-500">
+                    Removed{item.removed_by ? ` by ${canonicalLead(item.removed_by)}` : ""}
+                    {item.removed_at ? ` on ${fmtDate(item.removed_at.slice(0, 10))}` : ""}
+                    {item.removed_reason ? ` — ${item.removed_reason}` : ""}
+                  </p>
+                  <button
+                    onClick={() => restore(item)}
+                    disabled={busyId === item.id}
+                    className="rounded-md border border-emerald-600 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-40"
+                  >
+                    ↩ Restore
+                  </button>
                 </div>
-                <input
-                  defaultValue={item.fit_notes ?? ""}
-                  onBlur={(e) => updateFitNotes(item.id, e.target.value)}
-                  placeholder="Why (optional notes)…"
-                  className="min-w-[200px] flex-1 rounded-md border border-neutral-200 px-2 py-1 text-xs text-neutral-600"
-                />
+              ) : (
+              <div className="flex items-center gap-2">
+                {item.clickup_url && (
+                  <a
+                    href={item.clickup_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Open this opportunity in ClickUp"
+                    className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                  >
+                    ClickUp ↗
+                  </a>
+                )}
+                <button
+                  onClick={() => setExpandedId(expanded ? null : item.id)}
+                  className={`rounded-md border px-3 py-1.5 text-sm font-medium ${
+                    expanded ? "border-[var(--accent)] bg-orange-50 text-[var(--accent)]" : "border-neutral-300 text-neutral-700 hover:bg-neutral-50"
+                  }`}
+                >
+                  Breakdown {expanded ? "▴" : "▾"}
+                </button>
+                <select
+                  value={item.status}
+                  onChange={(e) => updateStatus(item.id, e.target.value as TrackerStatus)}
+                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+                >
+                  {TRACKER_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {STATUS_LABELS[status]}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => {
+                    setRemovingId(removingId === item.id ? null : item.id);
+                    setRemoveReason("");
+                  }}
+                  title="Remove & discard — takes it out of every tab (nothing is deleted; you can restore it)"
+                  aria-label="Remove and discard this opportunity"
+                  className="rounded-md border border-neutral-300 px-2.5 py-1.5 text-sm text-neutral-500 hover:border-red-300 hover:bg-red-50 hover:text-red-600"
+                >
+                  🗑️
+                </button>
               </div>
+              )}
+            </div>
+            {removingId === item.id && !removed && (
+              <div className="flex flex-col gap-2 rounded-md border border-red-200 bg-red-50 p-3">
+                <p className="text-sm font-medium text-red-800">Remove &amp; discard “{item.grant?.title ?? "this opportunity"}”?</p>
+                <p className="text-xs text-red-700">
+                  It leaves the Application Tracker, Eligibility Tracker, Draft Application and Management Dashboard, and the Grant Scanner hides it.
+                  Notes, drafts and action points are kept — restore it any time from “Removed”.
+                  {canonicalLead(item.owner) && canonicalLead(item.owner) !== viewer ? ` ${canonicalLead(item.owner)} (the lead) will be told.` : ""}
+                </p>
+                <input
+                  value={removeReason}
+                  onChange={(e) => setRemoveReason(e.target.value)}
+                  placeholder="Why? (optional) e.g. not eligible, deadline passed, duplicate"
+                  className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm"
+                  onKeyDown={(e) => e.key === "Enter" && confirmRemove(item)}
+                  autoFocus
+                />
+                <div className="flex justify-end gap-2">
+                  <button onClick={() => setRemovingId(null)} className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-50">
+                    Keep it
+                  </button>
+                  <button
+                    onClick={() => confirmRemove(item)}
+                    disabled={busyId === item.id}
+                    className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-40"
+                  >
+                    {busyId === item.id ? "Removing…" : "Remove & discard"}
+                  </button>
+                </div>
+              </div>
+            )}
+            {expanded && !removed && (
+              <OpportunityBreakdown
+                item={item}
+                viewer={viewer}
+                notes={notes.filter((n) => n.tracker_item_id === item.id)}
+                actions={actions.filter((a) => a.tracker_item_id === item.id)}
+                onItemChange={(patch) => patchItem(item.id, patch)}
+                onGrantChange={(patch) => patchGrant(item.id, patch)}
+                onNotesChange={setNotes}
+                onActionsChange={setActions}
+              />
+            )}
             </div>
           );
         })}
@@ -467,112 +674,36 @@ export default function EligibilityTracker() {
   );
 }
 
-const RULE_STATUS_MARK: Record<string, string> = { pass: "✓", fail: "✕", warn: "!", unclear: "?", na: "–" };
-
-function RuleList({ title, rules, tone }: { title: string; rules: RuleResult[]; tone: string }) {
-  if (rules.length === 0) return null;
-  return (
-    <div>
-      <p className={`text-xs font-semibold uppercase tracking-wide ${tone}`}>{title}</p>
-      <ul className="mt-1 flex flex-col gap-1.5">
-        {rules.map((r) => (
-          <li key={r.id} className="text-xs text-neutral-700">
-            <span className="font-medium">
-              {RULE_STATUS_MARK[r.status] ?? ""} {r.label}:
-            </span>{" "}
-            {r.detail}
-            {r.evidence && <span className="block italic text-neutral-500">&ldquo;{r.evidence}&rdquo;</span>}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-// The engine's reasoning for one opportunity: a one-line verdict, expandable
-// into what blocked it, what to verify, watch-outs, and required-document
-// readiness. The 0–100 score is stored on the grant but deliberately not shown.
-function VerdictPanel({ report }: { report: EligibilityReport }) {
-  const docsNeedingAttention = report.docs.filter((d) => d.status === "needs_partner" || d.status === "unknown");
-  return (
-    <details className={`rounded-md border px-3 py-2 ${VERDICT_STYLES[report.verdict]}`}>
-      <summary className="cursor-pointer text-sm font-medium">
-        {VERDICT_LABELS[report.verdict]} — <span className="font-normal">{report.summary}</span>
-      </summary>
-      <div className="mt-3 flex flex-col gap-3 rounded bg-white/70 p-3 text-neutral-700">
-        {report.link_note && (
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">About the link</p>
-            <p className="mt-1 text-xs">{report.link_note}</p>
-          </div>
-        )}
-        <RuleList title="Why not" rules={report.blocking} tone="text-red-700" />
-        <RuleList title="To verify" rules={report.open_questions} tone="text-amber-700" />
-        <RuleList title="Watch-outs" rules={report.warnings} tone="text-amber-700" />
-        {report.manual_review.length > 0 && (
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Read manually</p>
-            <ul className="mt-1 list-disc pl-4 text-xs">
-              {report.manual_review.map((line, idx) => (
-                <li key={idx}>{line}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {docsNeedingAttention.length > 0 && (
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Documents needing attention</p>
-            <ul className="mt-1 list-disc pl-4 text-xs">
-              {docsNeedingAttention.map((d, idx) => (
-                <li key={idx}>
-                  {d.name} — {d.status === "needs_partner" ? "needs a third party's sign-off" : "not in BURN's document inventory, check manually"}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        <RuleList title="Passed" rules={report.passed} tone="text-emerald-700" />
-        <p className="text-xs text-neutral-400">
-          Checked {new Date(report.checked_at).toLocaleDateString()} · {report.model} · {report.sources.length} source
-          {report.sources.length === 1 ? "" : "s"} read
-        </p>
-      </div>
-    </details>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <p className="text-xs uppercase tracking-wide text-neutral-400">{label}</p>
-      <div className="mt-0.5 text-neutral-700">{children}</div>
-    </div>
-  );
-}
-
-function FitPill({
-  status,
+function StatTile({
+  label,
+  value,
+  color,
+  subtitle,
   active,
   onClick,
 }: {
-  status: FitStatus;
-  active: boolean;
-  onClick: () => void;
+  label: string;
+  value: number;
+  color: string;
+  subtitle?: string;
+  active?: boolean;
+  onClick?: () => void;
 }) {
-  const activeColor =
-    status === "fit"
-      ? "bg-emerald-600 text-white"
-      : status === "not_fit"
-      ? "bg-red-600 text-white"
-      : "bg-neutral-700 text-white";
+  // A real <button> (not a <div>) so this is keyboard/focus accessible —
+  // every tile now doubles as a shortcut for the matching status filter.
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-        active ? activeColor : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+      className={`rounded-lg border p-4 text-center transition-colors ${
+        active
+          ? "border-[var(--accent)] bg-orange-50"
+          : "border-neutral-200 bg-white hover:bg-neutral-50"
       }`}
     >
-      {FIT_LABELS[status]}
+      <p className={`text-3xl font-semibold ${color}`}>{value}</p>
+      <p className="mt-1 text-xs uppercase tracking-wide text-neutral-500">{label}</p>
+      {subtitle && <p className="mt-1 text-xs font-medium text-neutral-600">{subtitle}</p>}
     </button>
   );
 }
@@ -586,6 +717,11 @@ function FilterPill({
   onClick: () => void;
   children: React.ReactNode;
 }) {
+  // Solid-fill pills, matching the "Focus areas" filters in GrantScanner and
+  // EventsScanner. The previous border-only style had no background, so an
+  // inactive pill was thin grey text floating directly on the background
+  // photo and was effectively invisible. An opaque pill reads clearly
+  // whatever happens to be behind it.
   return (
     <button
       onClick={onClick}

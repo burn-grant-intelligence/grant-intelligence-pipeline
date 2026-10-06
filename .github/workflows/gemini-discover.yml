@@ -12,7 +12,12 @@ name: Gemini discovery
 on:
   schedule:
     - cron: '0 6 * * 2,5' # 06:00 UTC, Tuesdays and Fridays
-  workflow_dispatch: {} # lets you trigger a run manually from the Actions tab
+  workflow_dispatch: # lets you trigger a run manually from the Actions tab
+    inputs:
+      core_only:
+        description: 'Core grants search only (clean cooking, then large-ticket / catalytic / RBF and priority funders) — skip the longlist, broad search and events'
+        type: boolean
+        default: false
 
 jobs:
   gemini:
@@ -29,7 +34,10 @@ jobs:
     # event_sources list) back down rather than just raising this further.
     # 2026-10-02: +16 pages per run from config/funding_sources.yaml (the
     # longlist, read in a rotating batch) — about 4 more minutes; 50 total.
-    timeout-minutes: 50
+    # 2026-10-06: the core grants search (config/grant_search.yaml) runs first:
+    # up to ~27 search calls (clean cooking + fallback, large-ticket, priority
+    # funders) and up to ~70 pages read — roughly 30-40 more minutes. 120 total.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +57,7 @@ jobs:
           # Pages read per run from config/funding_sources.yaml (rotating).
           SOURCES_P1_PER_RUN: '10'
           SOURCES_OTHER_PER_RUN: '6'
-        run: python scripts/gemini_discover.py
+        run: python scripts/gemini_discover.py ${{ inputs.core_only && '--core-only' || '' }}
 
       # Housekeeping after each run: delete events that ended over a week ago,
       # discard duplicate copies and conference-mill listings. No Gemini

@@ -238,6 +238,12 @@ export interface DraftStageWork {
   stage_notes: string | null;
   review: StageReview | null;
   reviewed_at: string | null;
+  // The Claude chat this stage is written in (supabase/draft_claude_links_migration_2026-10-07.sql).
+  claude_url?: string | null;
+  claude_url_by?: string | null;
+  claude_url_at?: string | null;
+  claude_started_by?: string | null;
+  claude_started_at?: string | null;
   updated_by: string | null;
   created_at: string;
   updated_at: string;

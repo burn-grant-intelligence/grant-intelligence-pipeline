@@ -47,6 +47,7 @@ import { pastedSources } from "@/lib/eligibility/pastedText";
 import { buildReport } from "@/lib/eligibility/rules";
 import { loadProfile, type ProfileDb } from "@/lib/eligibility/profileStore";
 import { planTrackerUpdate, type TrackerFitRow } from "@/lib/eligibility/applyVerdict";
+import { REVIEW_ORIGIN, applyReviewPlan, planReviewSync, type ReviewAction, type ReviewItem } from "@/lib/eligibilityReview";
 import { applyDeadlineFallback, eligibleCountriesFrom } from "@/lib/eligibility/postprocess";
 import type { CallFacts, EligibilityReport } from "@/lib/eligibility/types";
 
@@ -582,5 +583,43 @@ export async function POST(request: Request) {
     trackerUpdates.push({ id: row.id, ...plan });
   }
 
-  return Response.json({ grant: grantUpdate, tracker: trackerUpdates });
+  // "Needs further review" → the lead gets a 👀 review action point; a re-check
+  // that decides it closes the open one (lib/eligibilityReview.ts). A failure
+  // here never fails the check itself — it comes back as `review_error`.
+  const reviews = await routeReviews(supabaseAdmin as unknown as ReviewDb, grantId, grantUpdate);
+
+  return Response.json({ grant: grantUpdate, tracker: trackerUpdates, ...reviews });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ReviewDb = { from: (table: string) => any };
+
+async function routeReviews(
+  db: ReviewDb,
+  grantId: string,
+  grantUpdate: NonNullable<ReviewItem["grant"]>
+) {
+  try {
+    const { data: rows, error: rowsError } = await db
+      .from("tracker_items")
+      .select("id, owner, fit_status, fit_source, removed_at")
+      .eq("grant_id", grantId);
+    if (rowsError) return { review_error: rowsError.message as string };
+    const items: ReviewItem[] = ((rows ?? []) as ReviewItem[]).map((r) => ({ ...r, grant: grantUpdate }));
+    if (!items.length) return {};
+    const { data: acts, error: actsError } = await db
+      .from("action_items")
+      .select("id, tracker_item_id, assignee, done, created_at, created_by, description, origin")
+      .in("tracker_item_id", items.map((i) => i.id))
+      .eq("origin", REVIEW_ORIGIN);
+    if (actsError) return { review_error: actsError.message as string };
+    const res = await applyReviewPlan(db, planReviewSync(items, (acts ?? []) as ReviewAction[]));
+    return {
+      reviews_created: res.created,
+      reviews_closed: res.closed,
+      ...(res.error ? { review_error: res.error } : {}),
+    };
+  } catch (e) {
+    return { review_error: e instanceof Error ? e.message : String(e) };
+  }
 }

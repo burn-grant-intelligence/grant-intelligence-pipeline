@@ -100,7 +100,8 @@ export function mentionsIn(text: string | null | undefined): string[] {
 export function recipientsFor(people: string[], author: string | null | undefined): string[] {
   const me = canonicalLead(author);
   const expanded = people.includes(EVERYONE) ? TEAM.map((t) => t.name) : people;
-  return [...new Set(expanded.map((p) => canonicalLead(p) ?? p))].filter((p) => p && p !== me);
+  // Team members only (not e.g. "Eligibility check", which asks for reviews by itself).
+  return [...new Set(expanded.map((p) => canonicalLead(p) ?? p))].filter((p) => p && p !== me && TEAM.some((t) => t.name === p));
 }
 
 /** The sentence around a position — used as the notification excerpt. */

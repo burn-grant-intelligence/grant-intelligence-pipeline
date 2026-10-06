@@ -32,6 +32,7 @@ import {
 } from "@/lib/collab";
 import { MentionText, MentionTextarea } from "@/components/Mentions";
 import { normalizeStage } from "@/lib/drafting";
+import { applyReviewPlan, fromLabel, leadChangePatch, openReviewFor, planReviewSync } from "@/lib/eligibilityReview";
 import type { ActionItem, ActionKind, ActionReply, DraftStage, Grant, OpportunityNote, PipelineStatusCode, TrackerItem } from "@/lib/types";
 
 // Short stage names for the badges on notes written in the Draft Application workspace.
@@ -125,6 +126,26 @@ export default function OpportunityBreakdown({
     if ((item[field] ?? null) === value) return;
     save({ [field]: value } as ItemPatch);
   };
+
+  // Picking a lead links them to the opportunity's eligibility review: if the
+  // check said "Needs further review", they get the 👀 review action point
+  // (or the open one moves to them from the previous lead).
+  async function saveLead(owner: string | null) {
+    const oldLead = item.owner;
+    if (!(await save({ owner }))) return;
+    const summary = grant?.eligibility_report?.summary;
+    const open = openReviewFor(item.id, actions);
+    const patch = leadChangePatch(open, oldLead, owner, summary);
+    if (open && patch) {
+      const { error: e } = await supabase.from("action_items").update(patch).eq("id", open.id);
+      if (e) return setError(e.message);
+      onActionsChange((prev) => prev.map((a) => (a.id === open.id ? { ...a, ...patch } : a)));
+      return;
+    }
+    const res = await applyReviewPlan(supabase, planReviewSync([{ ...item, owner }], actions));
+    if (res.error) setError(res.error);
+    if (res.created.length) onActionsChange((prev) => [...prev, ...res.created]);
+  }
 
   async function saveStatus(code: string) {
     if (!code) return save({ pipeline_status: null });
@@ -224,7 +245,7 @@ export default function OpportunityBreakdown({
             </select>
           </Field>
           <Field label="Lead">
-            <select value={canonicalLead(item.owner) ?? ""} onChange={(e) => save({ owner: e.target.value || null })} className={inputCls}>
+            <select value={canonicalLead(item.owner) ?? ""} onChange={(e) => saveLead(e.target.value || null)} className={inputCls}>
               <option value="">Unassigned</option>
               {LEADS.map((n) => <option key={n} value={n}>{n}</option>)}
               {item.owner && !LEADS.includes(canonicalLead(item.owner)!) && <option value={item.owner}>{item.owner}</option>}
@@ -770,7 +791,7 @@ export function ActionRow({
       <span className={a.done ? "text-neutral-400 line-through" : "text-neutral-700"}>
         {icon && `${icon} `}
         {a.kind === "meeting" && a.meeting_with ? <strong className="font-medium">Meeting with {a.meeting_with}: </strong> : null}
-        {isRequest && <strong className="font-medium">{kindLabel(a.kind)}{a.created_by ? ` from ${firstName(a.created_by)}` : ""}: </strong>}
+        {isRequest && <strong className="font-medium">{kindLabel(a.kind)}{a.created_by ? ` from ${fromLabel(a.created_by)}` : ""}: </strong>}
         <MentionText text={a.description} />
         {showOpportunity && <span className="text-neutral-400"> — {opportunity}</span>}
       </span>

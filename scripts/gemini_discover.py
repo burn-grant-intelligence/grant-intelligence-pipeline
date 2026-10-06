@@ -1,9 +1,15 @@
 """
 Clean cooking / clean energy opportunity + event discovery via Gemini.
 
-Two modes:
-  python scripts/gemini_discover.py           funding opportunities + events (gemini-discover.yml)
-  python scripts/gemini_discover.py --awards  awards, prizes and competitions only (awards-discover.yml)
+Modes:
+  python scripts/gemini_discover.py              core grants search first, then the rest + events (gemini-discover.yml)
+  python scripts/gemini_discover.py --core-only  the core grants search only (clean cooking, then large-ticket / catalytic)
+  python scripts/gemini_discover.py --awards     awards, prizes and competitions only (awards-discover.yml)
+
+The core grants search (config/grant_search.yaml) runs before everything
+else: clean cooking calls first (with extra year-specific searches when few
+are found), then large-ticket / catalytic / results-based funding and the
+priority funders (FID, DIV, DGBP, ...) checked on every run.
 
 Uses Gemini's built-in Google Search grounding to find candidate items
 matching BURN's profile — both funding opportunities (RFPs, EOIs, calls for
@@ -154,11 +160,87 @@ def _rotate(items: list, count: int, run: int) -> list:
 
 def rotating_source_batch(today=None) -> list[dict]:
     """This run's share of the longlist: SOURCES_P1_PER_RUN priority-1 pages
-    and SOURCES_OTHER_PER_RUN priority-2/3 pages, continuing from last run."""
+    and SOURCES_OTHER_PER_RUN priority-2/3 pages, continuing from last run.
+    Pages that are priority funders in config/grant_search.yaml are left out
+    here: those are checked on every run anyway."""
     run = run_number(today)
-    p1 = [s for s in FUNDING_SOURCES if s["priority"] <= 1]
-    rest = [s for s in FUNDING_SOURCES if s["priority"] > 1]
+    sources = [s for s in FUNDING_SOURCES if not is_priority_funder_source(s)]
+    p1 = [s for s in sources if s["priority"] <= 1]
+    rest = [s for s in sources if s["priority"] > 1]
     return _rotate(p1, SOURCES_P1_PER_RUN, run) + _rotate(rest, SOURCES_OTHER_PER_RUN, run)
+
+
+# ── Core grants search (config/grant_search.yaml) ──
+# Searched first on every run, in BURN's order of priority: clean cooking,
+# then large-ticket / catalytic / results-based funding. Optional file.
+try:
+    _grant_search_config = _load_yaml("grant_search.yaml")
+except FileNotFoundError:
+    _grant_search_config = {}
+
+THIS_YEAR = TODAY.year
+NEXT_YEAR = TODAY.year + 1
+
+
+def _strings(values) -> list[str]:
+    return [str(v).strip() for v in (values or []) if isinstance(v, str) and str(v).strip()]
+
+
+def _grant_tier(key: str, default_label: str) -> dict:
+    cfg = _grant_search_config.get(key) or {}
+    fallback = cfg.get("fallback") or {}
+    return {
+        "key": key,
+        "label": str(cfg.get("label") or default_label),
+        "per_search": int(cfg.get("per_search") or 6),
+        "max_to_read": int(cfg.get("max_to_read") or 20),
+        "searches": _strings(cfg.get("searches")),
+        "fallback_min": int(fallback.get("min_saved") or 0),
+        "fallback_searches": _strings(fallback.get("searches")),
+        "priority_funders": [
+            {"name": str(f["name"]).strip(), "url": str(f.get("url") or "").strip() or None}
+            for f in (cfg.get("priority_funders") or [])
+            if isinstance(f, dict) and str(f.get("name") or "").strip()
+        ],
+    }
+
+
+CLEAN_COOKING_TIER = _grant_tier("clean_cooking", "Clean cooking calls (core business)")
+LARGE_TICKET_TIER = _grant_tier("large_ticket", "Large-ticket, catalytic & results-based funding")
+PRIORITY_FUNDERS = LARGE_TICKET_TIER["priority_funders"]
+
+
+def _url_key(url: str | None) -> str:
+    return re.sub(r"^https?://(www\.)?", "", str(url or "").strip().lower()).rstrip("/")
+
+
+def _name_key(name: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name or "").split(" — ")[0].lower())
+
+
+def is_priority_funder_source(source: dict) -> bool:
+    """A longlist page that is also a priority funder (same page, or same
+    name before any " — ")."""
+    urls = {_url_key(f["url"]) for f in PRIORITY_FUNDERS if f["url"]}
+    names = {_name_key(f["name"]) for f in PRIORITY_FUNDERS}
+    return _url_key(source.get("url")) in urls or _name_key(source.get("name")) in names
+
+
+# Same rule as lib/opportunitySection.ts (the Grant Scanner's "Clean cooking
+# calls" section): tagged clean cooking, or clean cooking named in the text.
+CLEAN_COOKING_TEXT = re.compile(
+    r"clean[\s-]*cook|cook[\s-]*stoves?|\be[\s-]?cook|electric (pressure )?cook|induction cook|"
+    r"cooking (fuel|energy|solution|appliance|technolog)|\blpg\b|bio[\s-]?ethanol|improved (biomass )?stoves?",
+    re.IGNORECASE,
+)
+
+
+def is_clean_cooking(fields: dict) -> bool:
+    tags = {re.sub(r"[^a-z]", "", str(t).lower()) for t in (fields.get("focus_areas") or [])}
+    if "cleancooking" in tags:
+        return True
+    text = " ".join(str(fields.get(k) or "") for k in ("title", "description", "funder"))
+    return bool(CLEAN_COOKING_TEXT.search(text))
 
 
 _taxonomy = _load_yaml("taxonomy.yaml")
@@ -193,6 +275,8 @@ def render_prompt(template: str, **values) -> str:
 
 _PROMPT_VALUES = {
     "today": TODAY.isoformat(),
+    "year": THIS_YEAR,
+    "next_year": NEXT_YEAR,
     "burn_profile": BURN_PROFILE,
     "max_opportunities": MAX_OPPORTUNITIES_PER_RUN,
     "max_events": MAX_EVENTS_PER_RUN,
@@ -231,6 +315,9 @@ EVENT_EXTRACTION_PROMPT_TEMPLATE = render_prompt(PROMPTS["event_extraction"], **
 # and {url}/{title} in the extraction one. .get() so the normal run still
 # works with an older prompts.yaml that has no award prompts yet.
 AWARD_DISCOVERY_PROMPT_TEMPLATE = render_prompt(PROMPTS.get("award_discovery") or "", **_PROMPT_VALUES)
+# Core grants search: {grant_search}, {grant_tier_label} and
+# {max_grants_per_search} are filled per search.
+GRANT_DISCOVERY_PROMPT_TEMPLATE = render_prompt(PROMPTS.get("grant_discovery") or "", **_PROMPT_VALUES)
 AWARD_EXTRACTION_PROMPT_TEMPLATE = render_prompt(PROMPTS.get("award_extraction") or "", **_PROMPT_VALUES)
 
 
@@ -1264,6 +1351,131 @@ def run_awards() -> None:
     print(f"\nDone. {saved} award(s)/prize(s) added to the Grant Scanner (filter: Awards & prizes).")
 
 
+# ── Core grants search ──
+# Candidates found so far this run (all tiers), so one call found by two
+# searches is read once.
+_run_candidate_urls: set[str] = set()
+_run_candidates: list[dict] = []
+
+
+def discover_grant_candidates(searches: list[str], tier: dict) -> list[dict]:
+    """One Google-Search discovery call per search; new candidates only
+    (not already found earlier in this run, by link or ~75% title)."""
+    found: list[dict] = []
+    for i, search in enumerate(searches):
+        if i:
+            time.sleep(GEMINI_PACING_SECONDS)
+        search_text = render_prompt(search, year=THIS_YEAR, next_year=NEXT_YEAR)
+        prompt = render_prompt(
+            GRANT_DISCOVERY_PROMPT_TEMPLATE,
+            grant_search=search_text,
+            grant_tier_label=tier["label"],
+            max_grants_per_search=tier["per_search"],
+        )
+        batch = _discover(prompt, "opportunity", tier["per_search"])
+        print(f"  search \"{search_text[:70]}\": {len(batch)} candidate(s)")
+        for c in batch:
+            key = _url_key(c["url"])
+            if key in _run_candidate_urls or find_similar_title(c["title"], _run_candidates):
+                continue
+            _run_candidate_urls.add(key)
+            _run_candidates.append(c)
+            found.append(c)
+    return found
+
+
+def read_grant_candidates(candidates: list[dict], limit: int, label: str) -> list[dict]:
+    """Drop candidates already in the Grant Scanner, read up to `limit` of
+    the rest, save the open calls. Returns the saved items' fields."""
+    if not candidates:
+        return []
+    already = seen_urls([c["url"] for c in candidates])
+    fresh = drop_known_candidates([c for c in candidates if c["url"] not in already])
+    if len(fresh) > limit:
+        print(f"  reading the first {limit} of {len(fresh)} new candidate(s)")
+        fresh = fresh[:limit]
+    saved: list[dict] = []
+    for candidate in fresh:
+        print(f"  → [{label}] {candidate['title'][:70]}")
+        fields_list = extract_opportunity(candidate)
+        if not fields_list:
+            print("    - nothing open right now; skipped")
+        for fields in fields_list:
+            if save_opportunity(fields, candidate, label=label):
+                saved.append(fields)
+        time.sleep(GEMINI_PACING_SECONDS)
+    return saved
+
+
+def check_priority_funders(funders: list[dict]) -> list[dict]:
+    """Every run: each priority funder's open call(s). A funder with a url has
+    that page read directly (like the fixed sources); one without is searched
+    for by name."""
+    saved: list[dict] = []
+    for funder in funders:
+        name = funder["name"]
+        if funder["url"]:
+            page = {
+                "title": f"Currently open calls for proposals, funding rounds or application windows from {name}",
+                "url": funder["url"],
+            }
+            print(f"  → [priority funder] {name[:70]}")
+            fields_list = extract_opportunity(page)
+            if not fields_list:
+                print("    - no open call right now")
+            for fields in fields_list:
+                if save_opportunity(fields, page, label="priority funder"):
+                    saved.append(fields)
+            time.sleep(GEMINI_PACING_SECONDS)
+        else:
+            search = (
+                f"The CURRENTLY OPEN call for proposals, funding round or application window from {name} — "
+                f"check the funder's official website and its announcements from {THIS_YEAR}; return nothing if no call is open today."
+            )
+            candidates = discover_grant_candidates([search], {**LARGE_TICKET_TIER, "per_search": 3})
+            saved += read_grant_candidates(candidates, 3, "priority funder")
+            time.sleep(GEMINI_PACING_SECONDS)
+    return saved
+
+
+def run_core_grants() -> int:
+    """The core grants search, in BURN's order of priority. Returns how many
+    opportunities were added to the Grant Scanner."""
+    if not GRANT_DISCOVERY_PROMPT_TEMPLATE:
+        print("! config/prompts.yaml has no grant_discovery prompt — upload the updated file. Skipping the core grants search.")
+        return 0
+    total = 0
+
+    cc = CLEAN_COOKING_TIER
+    if cc["searches"]:
+        print(f"\n① {cc['label']} — {len(cc['searches'])} search(es)")
+        saved = read_grant_candidates(discover_grant_candidates(cc["searches"], cc), cc["max_to_read"], "clean cooking")
+        found_cc = sum(1 for f in saved if is_clean_cooking(f))
+        print(f"  {found_cc} new open clean-cooking call(s) saved")
+        if cc["fallback_searches"] and found_cc < cc["fallback_min"]:
+            print(
+                f"  Fewer than {cc['fallback_min']} — searching harder: "
+                f"{len(cc['fallback_searches'])} year-specific clean-cooking search(es)"
+            )
+            saved += read_grant_candidates(
+                discover_grant_candidates(cc["fallback_searches"], cc), cc["max_to_read"], "clean cooking"
+            )
+        total += len(saved)
+
+    lt = LARGE_TICKET_TIER
+    if PRIORITY_FUNDERS or lt["searches"]:
+        print(f"\n② {lt['label']}")
+    if PRIORITY_FUNDERS:
+        print(f"  Checking {len(PRIORITY_FUNDERS)} priority funder(s) (every run)")
+        total += len(check_priority_funders(PRIORITY_FUNDERS))
+    if lt["searches"]:
+        print(f"  {len(lt['searches'])} search(es)")
+        total += len(read_grant_candidates(discover_grant_candidates(lt["searches"], lt), lt["max_to_read"], "large ticket"))
+
+    print(f"\nCore grants search: {total} opportunity/ies added.")
+    return total
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Gemini discovery for the Grant Intelligence tool.")
     parser.add_argument(
@@ -1271,14 +1483,28 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="find open awards, prizes and competitions only (instead of funding opportunities + events)",
     )
-    if parser.parse_args(argv).awards:
+    parser.add_argument(
+        "--core-only",
+        action="store_true",
+        help="run only the core grants search (clean cooking, then large-ticket / catalytic / RBF)",
+    )
+    args = parser.parse_args(argv)
+    if args.awards:
         run_awards()
         return
 
-    print("Gemini discovery — searching for candidate opportunities and events")
+    print("Gemini discovery — core grants search first, then the rest and events")
 
     saved_opportunities = 0
     saved_events = 0
+
+    # ①② The core grants search comes first, so BURN's core business is
+    # always covered even if the run later runs short of time.
+    saved_opportunities += run_core_grants()
+    if args.core_only:
+        return
+
+    print("\n③ Everything else")
 
     # Fixed sources first: specific funder pages checked on every run
     # regardless of what the broad search below happens to surface — see

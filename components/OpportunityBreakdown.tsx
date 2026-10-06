@@ -447,7 +447,7 @@ export function NotesSection({
   stage?: DraftStage;
 }) {
   const [adding, setAdding] = useState(false);
-  const [onlyStage, setOnlyStage] = useState(true);
+  const [onlyStage, setOnlyStage] = useState(false); // start with everything, incl. Application Tracker meetings
   const [meetingDate, setMeetingDate] = useState(todayIso());
   const [text, setText] = useState("");
   const [drafts, setDrafts] = useState<DraftAction[]>([]);

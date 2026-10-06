@@ -116,12 +116,13 @@ export default function GrantScanner() {
           // hidden on the page, not in the query), so keep it well above the
           // number of open opportunities. 1000 is Supabase's row cap.
           .limit(1000),
-        supabase.from("tracker_items").select("grant_id, owner, status"),
+        supabase.from("tracker_items").select("*"),
       ]);
       if (grantsError) throw grantsError;
       // Tracked state comes from the database, so everyone sees "Tracked ✓"
       // on an opportunity someone else already tracked.
-      setTracked(new Map(((trackedRes.data ?? []) as { grant_id: string | null; owner: string | null; status: string }[]).filter((t) => t.grant_id).map((t) => [t.grant_id as string, { owner: t.owner, status: t.status }])));
+      // A removed opportunity ("Remove & discard") no longer counts as tracked.
+      setTracked(new Map(((trackedRes.data ?? []) as { grant_id: string | null; owner: string | null; status: string; removed_at?: string | null }[]).filter((t) => t.grant_id && !t.removed_at).map((t) => [t.grant_id as string, { owner: t.owner, status: t.status }])));
       setSourceCount(count ?? 0);
       setGrants(data ?? []);
     } catch (err) {
@@ -270,9 +271,22 @@ export default function GrantScanner() {
   async function trackGrant(grant: Grant) {
     setTrackingId(grant.id);
     setError(null);
-    const { data: existing } = await supabase.from("tracker_items").select("grant_id, owner, status").eq("grant_id", grant.id).limit(1);
+    const { data: existing } = await supabase.from("tracker_items").select("*").eq("grant_id", grant.id).limit(1);
     if (existing && existing.length) {
-      setTracked((prev) => new Map(prev).set(grant.id, { owner: existing[0].owner, status: existing[0].status }));
+      const row = existing[0] as { id: string; owner: string | null; status: string; removed_at?: string | null };
+      // Removed earlier with "Remove & discard"? Tracking it again brings it back.
+      if (row.removed_at) {
+        const { error: restoreError } = await supabase
+          .from("tracker_items")
+          .update({ removed_at: null, removed_by: null, removed_reason: null, updated_at: new Date().toISOString() })
+          .eq("id", row.id);
+        if (restoreError) {
+          setError(restoreError.message);
+          setTrackingId(null);
+          return;
+        }
+      }
+      setTracked((prev) => new Map(prev).set(grant.id, { owner: row.owner, status: row.status }));
       setTrackingId(null);
       return;
     }

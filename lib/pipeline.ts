@@ -27,6 +27,9 @@ export const TEAM: { name: string; short: string; email: string }[] = [
   { name: "Bornventure Kinoti", short: "Bornventure", email: "bornventure.kinoti@burnmfg.com" },
 ];
 export const LEADS = TEAM.map((t) => t.name);
+// An action point can be assigned to the whole team; it then shows in
+// everyone's desk (lib/mentions.ts tags "@Everyone" the same way).
+export const EVERYONE = "Everyone";
 
 export const PIPELINE_STATUSES: { code: PipelineStatusCode; label: string; group: string }[] = [
   { code: "1a", label: "EOI drafting in progress", group: "1. Drafting" },
@@ -154,19 +157,21 @@ export function dueState(a: Pick<ActionItem, "done" | "due_date">, today = today
   return days <= 3 ? "soon" : "later";
 }
 
-// Open action points for one person, most urgent first.
+// Open action points for one person, most urgent first: assigned to them, or
+// to Everyone (unless they created it).
 export function myOpenActions(actions: ActionItem[], person: string | null, today = todayIso()): ActionItem[] {
   if (!person) return [];
   const me = canonicalLead(person);
   const rank: Record<DueState, number> = { overdue: 0, today: 1, soon: 2, later: 3, none: 4, done: 5 };
   return actions
-    .filter((a) => !a.done && canonicalLead(a.assignee) === me)
+    .filter((a) => !a.done && (canonicalLead(a.assignee) === me || (a.assignee === EVERYONE && canonicalLead(a.created_by) !== me)))
     .sort((a, b) => rank[dueState(a, today)] - rank[dueState(b, today)] || (a.due_date ?? "9999").localeCompare(b.due_date ?? "9999"));
 }
 
 // "Meeting with Jane (Acme Fund): agree budget (Sammy, due 3 Oct 2026)"
 export function actionLine(a: ActionItem): string {
-  const head = a.kind === "meeting" ? `Meeting${a.meeting_with ? ` with ${a.meeting_with}` : ""}: ` : "";
+  const head =
+    a.kind === "meeting" ? `Meeting${a.meeting_with ? ` with ${a.meeting_with}` : ""}: ` : a.kind === "review" ? "Review: " : a.kind === "input" ? "Input needed: " : "";
   const tail = [a.assignee ? firstName(a.assignee) : "", a.due_date ? `due ${fmtDate(a.due_date)}` : ""].filter(Boolean).join(", ");
   return `${head}${a.description}${tail ? ` (${tail})` : ""}`;
 }

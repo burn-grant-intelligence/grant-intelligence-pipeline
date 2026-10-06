@@ -3,8 +3,22 @@
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabaseClient";
-import { ApplicantType, EligibilityVerdict, FitStatus, Grant, TrackerItem } from "@/lib/types";
+import { ActionItem, ActionReply, ApplicantType, EligibilityVerdict, FitStatus, Grant, TrackerItem } from "@/lib/types";
 import type { EligibilityReport, RuleResult } from "@/lib/eligibility/types";
+import { LEADS, canonicalLead, effectiveFields, firstName, myOpenActions } from "@/lib/pipeline";
+import { searchWords } from "@/lib/opportunitySection";
+import { setViewer, useViewer } from "@/lib/viewer";
+import {
+  applyReviewPlan,
+  isReviewAction,
+  nextStepFor,
+  openReviewFor,
+  outcomeBody,
+  planReviewSync,
+  type NextStep,
+} from "@/lib/eligibilityReview";
+import EligibilityReview, { PersonChip } from "@/components/EligibilityReview";
+import { ActionRow } from "@/components/OpportunityBreakdown";
 
 const FIT_LABELS: Record<FitStatus, string> = {
   unreviewed: "Unreviewed",
@@ -55,6 +69,29 @@ function docsSummaryForExport(grant: Grant | null): string {
   return grant.eligibility_checked_at ? "None listed" : "Not checked yet";
 }
 
+// Search: every word typed must appear in the title, funder, lead, countries,
+// sector, description or eligibility text (any order, any case).
+function matchesItem(item: TrackerItem, words: string[]): boolean {
+  if (!words.length) return true;
+  const g = item.grant;
+  const eff = effectiveFields(item);
+  const hay = [
+    eff.programName, eff.funder, g?.title, g?.funder, eff.lead, eff.description, g?.eligibility, g?.geography,
+    ...(g?.eligible_countries ?? []), ...(g?.focus_areas ?? []), ...(item.target_countries ?? []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return words.every((w) => hay.includes(w));
+}
+
+const STEP_STYLES: Record<NextStep["key"], string> = {
+  review: "bg-amber-100 text-amber-900 border-amber-300",
+  check: "bg-blue-50 text-blue-800 border-blue-200",
+  decide: "bg-violet-50 text-violet-800 border-violet-200",
+  waiting: "bg-neutral-100 text-neutral-600 border-neutral-200",
+};
+
 export default function EligibilityTracker() {
   const [items, setItems] = useState<TrackerItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,44 +101,111 @@ export default function EligibilityTracker() {
   // "Paste the call text" fallback: which cards have the box open, and what is typed in it.
   const [pasteOpen, setPasteOpen] = useState<Record<string, boolean>>({});
   const [pasteDrafts, setPasteDrafts] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    loadData();
-  }, []);
+  // Action points (for reviews and "your open action points") and the replies on reviews.
+  const [actions, setActions] = useState<ActionItem[]>([]);
+  const [replies, setReplies] = useState<ActionReply[]>([]);
+  // A problem with reviews that shouldn't hide the list (e.g. migration not run yet).
+  const [notice, setNotice] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  // "View as" is the same choice as "Viewing as" in the Application Tracker (lib/viewer.ts).
+  const viewer = useViewer();
+  const me = canonicalLead(viewer);
 
   async function loadData() {
     setLoading(true);
     setError(null);
-    const { data, error: fetchError } = await supabase
-      .from("tracker_items")
-      .select("*, grant:grants(*)")
-      .order("updated_at", { ascending: false });
+    const [{ data, error: fetchError }, acts] = await Promise.all([
+      supabase.from("tracker_items").select("*, grant:grants(*)").order("updated_at", { ascending: false }),
+      supabase.from("action_items").select("*").order("created_at", { ascending: true }),
+    ]);
     if (fetchError) setError(fetchError.message);
     // "Remove & discard" in the Application Tracker hides an opportunity everywhere.
-    setItems(((data as unknown as TrackerItem[]) ?? []).filter((i) => !i.removed_at));
+    const live = ((data as unknown as TrackerItem[]) ?? []).filter((i) => !i.removed_at);
+    setItems(live);
     setLoading(false);
+    if (acts.error) return;
+    let actionRows = (acts.data as ActionItem[]) ?? [];
+
+    // Every opportunity the check flagged "Needs further review" gets a review
+    // with its lead; reviews no longer needed are closed (lib/eligibilityReview.ts).
+    if (!fetchError) {
+      const res = await applyReviewPlan(supabase, planReviewSync(live, actionRows));
+      setNotice(res.error);
+      if (res.created.length || res.closed.length) {
+        const closed = new Set(res.closed.map((c) => c.id));
+        const now = new Date().toISOString();
+        actionRows = [...actionRows.map((a) => (closed.has(a.id) ? { ...a, done: true, done_at: now } : a)), ...res.created];
+      }
+    }
+    setActions(actionRows);
+
+    const reviewIds = actionRows.filter(isReviewAction).map((a) => a.id);
+    if (reviewIds.length) {
+      const { data: r } = await supabase.from("action_replies").select("*").in("action_id", reviewIds).order("created_at", { ascending: true });
+      setReplies((r as ActionReply[]) ?? []);
+    }
   }
 
+  useEffect(() => {
+    const t = setTimeout(loadData, 0);
+    return () => clearTimeout(t);
+  }, []);
+
+  // What the person in "View as" has to do on each opportunity.
+  const stepById = useMemo(() => new Map(items.map((i) => [i.id, nextStepFor(i, actions, viewer)])), [items, actions, viewer]);
+  // Their other open action points (from the Application Tracker), per opportunity.
+  const myActionsById = useMemo(() => {
+    const map = new Map<string, ActionItem[]>();
+    for (const a of myOpenActions(actions.filter((x) => !isReviewAction(x)), viewer)) {
+      map.set(a.tracker_item_id, [...(map.get(a.tracker_item_id) ?? []), a]);
+    }
+    return map;
+  }, [actions, viewer]);
+
+  // Search, then "View as": the opportunities they lead, plus any with a
+  // review or action point waiting for them.
+  const visibleItems = useMemo(() => {
+    const words = searchWords(search);
+    const list = items.filter(
+      (i) => matchesItem(i, words) && (!me || canonicalLead(i.owner) === me || !!stepById.get(i.id) || myActionsById.has(i.id))
+    );
+    if (!me) return list;
+    const rank = (i: TrackerItem) => stepById.get(i.id)?.rank ?? (myActionsById.has(i.id) ? 4 : 9);
+    return [...list].sort((a, b) => rank(a) - rank(b));
+  }, [items, search, me, stepById, myActionsById]);
+
+  const mySummary = useMemo(() => {
+    if (!me) return null;
+    const steps = visibleItems.map((i) => stepById.get(i.id)?.key);
+    return {
+      leads: visibleItems.filter((i) => canonicalLead(i.owner) === me).length,
+      reviews: steps.filter((k) => k === "review").length,
+      notChecked: steps.filter((k) => k === "check").length,
+      decide: steps.filter((k) => k === "decide").length,
+      actions: visibleItems.reduce((n, i) => n + (myActionsById.get(i.id)?.length ?? 0), 0),
+    };
+  }, [me, visibleItems, stepById, myActionsById]);
+
   const counts = useMemo(() => {
-    const base = { all: items.length, unreviewed: 0, fit: 0, not_fit: 0, needs_review: 0 };
-    for (const item of items) {
+    const base = { all: visibleItems.length, unreviewed: 0, fit: 0, not_fit: 0, needs_review: 0 };
+    for (const item of visibleItems) {
       const status = item.fit_status ?? "unreviewed";
       base[status]++;
       if (status === "unreviewed" && item.grant?.eligibility_verdict === "needs_review") base.needs_review++;
     }
     return base;
-  }, [items]);
+  }, [visibleItems]);
 
   const filteredItems = useMemo(
     () =>
       fitFilter === "all"
-        ? items
+        ? visibleItems
         : fitFilter === "needs_review"
-        ? items.filter(
+        ? visibleItems.filter(
             (i) => (i.fit_status ?? "unreviewed") === "unreviewed" && i.grant?.eligibility_verdict === "needs_review"
           )
-        : items.filter((i) => (i.fit_status ?? "unreviewed") === fitFilter),
-    [items, fitFilter]
+        : visibleItems.filter((i) => (i.fit_status ?? "unreviewed") === fitFilter),
+    [visibleItems, fitFilter]
   );
 
   // A person's Fit / Not fit choice is marked fit_source "manual" so a later
@@ -118,6 +222,28 @@ export default function EligibilityTracker() {
       return;
     }
     setItems((prev) => prev.map((i) => (i.id === trackerItemId ? { ...i, fit_status, fit_source } : i)));
+
+    // Deciding by hand also closes the open review, noting who decided.
+    const open = fit_status !== "unreviewed" ? openReviewFor(trackerItemId, actions) : null;
+    if (open) {
+      const now = new Date().toISOString();
+      const { error: aErr } = await supabase.from("action_items").update({ done: true, done_at: now }).eq("id", open.id);
+      if (aErr) return setError(aErr.message);
+      setActions((prev) => prev.map((a) => (a.id === open.id ? { ...a, done: true, done_at: now } : a)));
+      const { data: reply } = await supabase
+        .from("action_replies")
+        .insert({ action_id: open.id, tracker_item_id: trackerItemId, author: me, body: outcomeBody(fit_status === "fit" ? "fit" : "not_fit", "") })
+        .select()
+        .single();
+      if (reply) setReplies((prev) => [...prev, reply as ActionReply]);
+    }
+  }
+
+  async function toggleAction(a: ActionItem) {
+    const patch = { done: !a.done, done_at: !a.done ? new Date().toISOString() : null };
+    const { error: e } = await supabase.from("action_items").update(patch).eq("id", a.id);
+    if (e) return setError(e.message);
+    setActions((prev) => prev.map((x) => (x.id === a.id ? { ...x, ...patch } : x)));
   }
 
   async function updateFitNotes(trackerItemId: string, fit_notes: string) {
@@ -178,6 +304,17 @@ export default function EligibilityTracker() {
           return trackerChange ? { ...item, ...trackerChange } : item;
         })
       );
+      // "Needs further review" → the lead was tagged with a review; a decided re-check closed it.
+      const created: ActionItem[] = json.reviews_created ?? [];
+      const closed: { id: string; reply: ActionReply | null }[] = json.reviews_closed ?? [];
+      if (created.length || closed.length) {
+        const ids = new Set(closed.map((c) => c.id));
+        const now = new Date().toISOString();
+        setActions((prev) => [...prev.map((a) => (ids.has(a.id) ? { ...a, done: true, done_at: now } : a)), ...created]);
+        const closing = closed.map((c) => c.reply).filter((r): r is ActionReply => !!r);
+        if (closing.length) setReplies((prev) => [...prev, ...closing]);
+      }
+      setNotice(json.review_error ?? null);
     } catch {
       setError("Could not reach the eligibility check endpoint. Is the app deployed with GEMINI_API_KEY set?");
       if (itemId) setPasteOpen((prev) => ({ ...prev, [itemId]: true }));
@@ -194,9 +331,15 @@ export default function EligibilityTracker() {
       Sector: item.grant?.focus_areas?.join(", ") ?? "",
       "Single / Consortium": APPLICANT_TYPE_LABELS[item.grant?.applicant_type ?? "unclear"],
       "Supporting Docs": docsSummaryForExport(item.grant ?? null),
+      Lead: canonicalLead(item.owner) ?? "",
       Fit: FIT_LABELS[item.fit_status ?? "unreviewed"],
       "Eligibility check": item.grant?.eligibility_verdict ? VERDICT_LABELS[item.grant.eligibility_verdict] : "",
       "Check summary": item.grant?.eligibility_report?.summary ?? "",
+      "Review with": canonicalLead(openReviewFor(item.id, actions)?.assignee) ?? "",
+      "Review notes": replies
+        .filter((r) => actions.some((a) => a.id === r.action_id && a.tracker_item_id === item.id))
+        .map((r) => `${canonicalLead(r.author) ?? "Someone"}: ${r.body}`)
+        .join("\n"),
     }));
     const worksheet = XLSX.utils.json_to_sheet(rows);
     worksheet["!cols"] = [
@@ -206,8 +349,11 @@ export default function EligibilityTracker() {
       { wch: 24 },
       { wch: 18 },
       { wch: 40 },
+      { wch: 20 },
       { wch: 12 },
       { wch: 18 },
+      { wch: 60 },
+      { wch: 20 },
       { wch: 60 },
     ];
     const workbook = XLSX.utils.book_new();
@@ -230,6 +376,67 @@ export default function EligibilityTracker() {
           </a>
         )}
       </section>
+
+      {/* View as + search */}
+      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-[var(--border)] bg-white p-4">
+        <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-[var(--ink-muted)]">
+          View as
+          <select
+            value={me ?? ""}
+            onChange={(e) => setViewer(e.target.value || null)}
+            aria-label="View as"
+            className="rounded-md border border-neutral-300 px-3 py-2 text-sm normal-case tracking-normal text-neutral-800"
+          >
+            <option value="">Whole team</option>
+            {LEADS.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex min-w-[16rem] flex-1 flex-col gap-1 text-xs font-medium uppercase tracking-wide text-[var(--ink-muted)]">
+          Search
+          <span className="relative">
+            <input
+              type="text"
+              enterKeyHint="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && setSearch("")}
+              placeholder="Title, funder, lead, country or keyword, e.g. FID, Danida, Kenya"
+              aria-label="Search opportunities"
+              className="w-full rounded-md border border-neutral-300 py-2 pl-8 pr-8 text-sm normal-case tracking-normal text-neutral-800 placeholder:text-neutral-400"
+            />
+            <span aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-neutral-400">⌕</span>
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full px-1 text-base leading-none text-neutral-400 hover:text-neutral-700"
+              >
+                ×
+              </button>
+            )}
+          </span>
+        </label>
+      </div>
+
+      {mySummary && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border)] bg-white px-4 py-3 text-sm text-neutral-700">
+          <PersonChip name={me} />
+          <span>
+            leads <strong>{mySummary.leads}</strong> opportunit{mySummary.leads === 1 ? "y" : "ies"} here
+          </span>
+          {mySummary.reviews > 0 && <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${STEP_STYLES.review}`}>👀 {mySummary.reviews} review{mySummary.reviews > 1 ? "s" : ""} waiting for you</span>}
+          {mySummary.notChecked > 0 && <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${STEP_STYLES.check}`}>▶ {mySummary.notChecked} not checked yet</span>}
+          {mySummary.decide > 0 && <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${STEP_STYLES.decide}`}>{mySummary.decide} to decide</span>}
+          {mySummary.actions > 0 && <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2 py-0.5 text-xs font-medium text-neutral-700">✔︎ {mySummary.actions} open action point{mySummary.actions > 1 ? "s" : ""}</span>}
+          {!mySummary.reviews && !mySummary.notChecked && !mySummary.decide && !mySummary.actions && <span className="text-xs text-emerald-700">Nothing waiting on you here 🎉</span>}
+          <span className="text-xs text-neutral-400">· things needing you are listed first</span>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
@@ -263,11 +470,24 @@ export default function EligibilityTracker() {
           {error}
         </div>
       )}
+      {notice && <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{notice}</div>}
 
       {!loading && !error && filteredItems.length === 0 && (
         <div className="rounded-lg border border-dashed border-neutral-300 bg-white p-10 text-center text-neutral-500">
-          <p className="mb-1 font-medium text-neutral-700">Nothing here yet</p>
-          <p className="text-sm">Track an opportunity from the Grant Scanner or Application Tracker first.</p>
+          {items.length === 0 ? (
+            <>
+              <p className="mb-1 font-medium text-neutral-700">Nothing here yet</p>
+              <p className="text-sm">Track an opportunity from the Grant Scanner or Application Tracker first.</p>
+            </>
+          ) : (
+            <>
+              <p className="mb-1 font-medium text-neutral-700">No opportunities match</p>
+              <p className="text-sm">
+                {search ? `Nothing matches “${search}”. ` : ""}
+                {me ? `${firstName(me)} isn't the lead on any${fitFilter === "all" ? "" : " of these"} and has nothing waiting. Choose “Whole team” to see everything.` : "Try another filter."}
+              </p>
+            </>
+          )}
         </div>
       )}
 
@@ -284,6 +504,8 @@ export default function EligibilityTracker() {
           const checkLink = savedLink || grant?.rfp_url || grant?.application_url || null;
           const pastedDraft = pasteDrafts[item.id] ?? "";
           const showPaste = !!pasteOpen[item.id];
+          const step = stepById.get(item.id) ?? null;
+          const myActions = me ? myActionsById.get(item.id) ?? [] : [];
 
           return (
             <div
@@ -299,6 +521,16 @@ export default function EligibilityTracker() {
                     {grant?.funder ?? "Unknown funder"}
                     {" · "}
                     <span className="uppercase tracking-wide text-xs">{item.status}</span>
+                  </p>
+                  <p className="mt-1 flex flex-wrap items-center gap-1.5">
+                    {canonicalLead(item.owner) ? (
+                      <PersonChip name={item.owner} prefix="Lead: " />
+                    ) : (
+                      <span title="Pick a lead in the Application Tracker (Breakdown → Lead)" className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] font-medium text-neutral-500">
+                        No lead yet
+                      </span>
+                    )}
+                    {step && <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${STEP_STYLES[step.key]}`}>{step.label}</span>}
                   </p>
                 </div>
                 <button
@@ -412,6 +644,30 @@ export default function EligibilityTracker() {
               </div>
 
               {grant?.eligibility_report && <VerdictPanel report={grant.eligibility_report} />}
+
+              <EligibilityReview
+                item={item}
+                reviews={actions.filter((a) => a.tracker_item_id === item.id && isReviewAction(a))}
+                replies={replies}
+                viewer={viewer}
+                onActionsChange={setActions}
+                onRepliesChange={setReplies}
+                onItemPatch={(patch) => setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, ...patch } : i)))}
+                onError={setError}
+              />
+
+              {myActions.length > 0 && (
+                <div className="rounded-md border border-neutral-200 p-3">
+                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                    {firstName(me)}&apos;s open action points · from the Application Tracker
+                  </p>
+                  <ul className="flex flex-col gap-1.5">
+                    {myActions.map((a) => (
+                      <ActionRow key={a.id} a={a} opportunity={grant?.title ?? ""} onToggle={toggleAction} viewer={viewer} />
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-3">
                 <div className="flex flex-wrap items-center gap-2">

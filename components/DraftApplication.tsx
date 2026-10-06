@@ -1,59 +1,37 @@
 "use client";
 
 // Draft Application: every opportunity marked Fit (or forced in with "Draft
-// anyway") sits on a board with three columns — Concept → First draft →
-// Submitted — the same idea as Tracking → Drafting → Submitted on the
-// Management Dashboard: count tiles on top, a staff filter, and every card has
-// a toggle (or can be dragged) to move it between columns. The full workspace
-// (Management guidance, Brief, Draft, Review, Meetings & actions, Notes &
-// learnings, History) opens from the card.
-// Stage logic and prompts: lib/drafting.ts. Gemini: app/api/draft-review.
+// anyway") sits on a board — Concept → First draft → Submitted. Each card has
+// two buttons: the stage's Claude chat (started once, then the same chat for
+// everyone — components/StageClaude.tsx) and "Open workspace" (meeting notes &
+// action points, donor guidance, and the full history — DraftWorkspace.tsx).
+// "View as" (shared with the other tabs) narrows the board to one person's
+// applications and the ones waiting on them; search finds any opportunity.
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { canonicalLead, effectiveFields, LEADS } from "@/lib/pipeline";
+import { canonicalLead, effectiveFields, firstName, LEADS, myOpenActions } from "@/lib/pipeline";
 import {
-  BOARD_COLUMNS, CLAUDE_PROJECT_URL, MIGRATION_HINT, buildClaudePrompt, carryForward, columnOf, daysLeftLabel, hasDraft, isMissingDraftTables,
-  openItems, pickLearnings, planMove, prevStage, stageMeta, stageOf, type BoardColumn,
+  BOARD_COLUMNS, MIGRATION_HINT, buildClaudePrompt, carryForward, columnOf, daysLeftLabel, hasDraft, isMissingDraftTables,
+  pickLearnings, planMove, prevStage, stageMeta, stageOf, type BoardColumn,
 } from "@/lib/drafting";
+import { searchWords } from "@/lib/opportunitySection";
+import { setViewer, useViewer } from "@/lib/viewer";
 import type { ActionItem, DraftGuidance, DraftLearning, DraftStage, DraftStageWork, OpportunityNote, TrackerItem } from "@/lib/types";
-import DraftWorkspace, { LiftDialog, MoveToggle } from "@/components/DraftWorkspace";
+import DraftWorkspace, { MoveToggle } from "@/components/DraftWorkspace";
+import StageClaude from "@/components/StageClaude";
+import { PersonChip } from "@/components/EligibilityReview";
 
-// "Viewing as" — the same browser setting (same key and event) as the
-// Application Tracker's picker, so choosing your name in either tab sets both.
-const VIEWER_KEY = "grant-intelligence.viewer";
-const VIEWER_EVENT = "grant-intelligence-viewer";
-let viewerFallback: string | null = null;
-function readViewer(): string | null {
-  try {
-    return canonicalLead(window.localStorage.getItem(VIEWER_KEY)) ?? viewerFallback;
-  } catch {
-    return viewerFallback;
-  }
+function matches(item: TrackerItem, words: string[]): boolean {
+  if (!words.length) return true;
+  const eff = effectiveFields(item);
+  const g = item.grant;
+  const hay = [eff.programName, eff.funder, eff.lead, g?.title, g?.funder, g?.geography, ...(g?.eligible_countries ?? []), ...(g?.focus_areas ?? [])]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return words.every((w) => hay.includes(w));
 }
-function writeViewer(value: string | null) {
-  viewerFallback = value;
-  try {
-    if (value) window.localStorage.setItem(VIEWER_KEY, value);
-    else window.localStorage.removeItem(VIEWER_KEY);
-  } catch {
-    // private browsing etc. — kept for this visit only
-  }
-  window.dispatchEvent(new Event(VIEWER_EVENT));
-}
-function subscribeViewer(cb: () => void) {
-  window.addEventListener("storage", cb);
-  window.addEventListener(VIEWER_EVENT, cb);
-  return () => {
-    window.removeEventListener("storage", cb);
-    window.removeEventListener(VIEWER_EVENT, cb);
-  };
-}
-
-type OwnerFilter = "all" | "unassigned" | string;
-type PendingMove = { item: TrackerItem; to: BoardColumn };
-
-const initials = (name: string) => name.split(" ").map((p) => p[0]).join("").slice(0, 2).toUpperCase();
 
 export default function DraftApplication() {
   const [items, setItems] = useState<TrackerItem[]>([]);
@@ -67,12 +45,11 @@ export default function DraftApplication() {
   const [notice, setNotice] = useState<string | null>(null);
   const [tablesMissing, setTablesMissing] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [pending, setPending] = useState<PendingMove | null>(null);
   const [moving, setMoving] = useState(false);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [ownerFilter, setOwnerFilter] = useState<OwnerFilter>("all");
+  const [search, setSearch] = useState("");
   const [dragOver, setDragOver] = useState<BoardColumn | null>(null);
-  const viewer = useSyncExternalStore(subscribeViewer, readViewer, () => null);
+  const viewer = useViewer();
+  const me = canonicalLead(viewer);
 
   async function loadData() {
     setLoading(true);
@@ -114,8 +91,8 @@ export default function DraftApplication() {
   }
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- load once on mount
-    loadData();
+    const t = setTimeout(loadData, 0);
+    return () => clearTimeout(t);
   }, []);
 
   const workFor = (itemId: string, stage: DraftStage) => works.find((w) => w.tracker_item_id === itemId && w.stage === stage) ?? null;
@@ -130,24 +107,21 @@ export default function DraftApplication() {
   // Move an application to another column. Concept → First draft copies the
   // concept's text across (each stage keeps its own version); First draft →
   // Submitted sets the tracker status and the submission date.
-  async function doMove(move: PendingMove) {
-    const { item } = move;
-    const plan = planMove(item, move.to);
+  async function moveTo(item: TrackerItem, to: BoardColumn) {
+    const plan = planMove(item, to);
     if (!plan.ok) {
       setNotice(plan.reason);
-      setPending(null);
       return;
     }
     setMoving(true);
     setError(null);
     const fromStage = stageOf(item);
     const fromWork = workFor(item.id, fromStage);
-    const open = plan.forward || plan.to === "submitted" ? openItems(fromStage, fromWork, item.draft_brief) : [];
     try {
       if (plan.forward && hasDraft(item.draft_brief, fromWork) && !hasDraft(item.draft_brief, workFor(item.id, "first_draft"))) {
         const { data, error: e } = await supabase
           .from("draft_stage_work")
-          .upsert({ tracker_item_id: item.id, stage: "first_draft", ...carryForward(fromWork), updated_by: viewer, updated_at: new Date().toISOString() }, { onConflict: "tracker_item_id,stage" })
+          .upsert({ tracker_item_id: item.id, stage: "first_draft", ...carryForward(fromWork), updated_by: me, updated_at: new Date().toISOString() }, { onConflict: "tracker_item_id,stage" })
           .select()
           .single();
         if (e) throw e;
@@ -159,31 +133,18 @@ export default function DraftApplication() {
       if (uErr) throw uErr;
       onItemChange(item.id, patch);
       if (plan.stage && plan.stage !== fromStage) {
-        const { error: hErr } = await supabase.from("draft_stage_history").insert({ tracker_item_id: item.id, from_stage: fromStage, to_stage: plan.stage, moved_by: viewer, open_items: open });
+        const { error: hErr } = await supabase.from("draft_stage_history").insert({ tracker_item_id: item.id, from_stage: fromStage, to_stage: plan.stage, moved_by: me, open_items: [] });
         if (hErr) console.warn("Stage history not saved:", hErr.message);
       }
       const label = BOARD_COLUMNS.find((c) => c.key === plan.to)?.label ?? plan.to;
       const name = effectiveFields(item).programName || "Opportunity";
-      setNotice(
-        plan.to === "submitted"
-          ? `${name} marked as submitted. It shows as Submitted in the Application Tracker too. Good luck!${open.length ? ` ${open.length} item${open.length > 1 ? "s were" : " was"} still open.` : ""}`
-          : `${name} moved to ${label}.${open.length ? ` ${open.length} item${open.length > 1 ? "s were" : " was"} still open and ${open.length > 1 ? "are" : "is"} noted in its History.` : ""}`
-      );
-      setPending(null);
+      setNotice(plan.to === "submitted" ? `${name} marked as submitted. It shows as Submitted in the Application Tracker too. Good luck!` : `${name} moved to ${label}.`);
     } catch (e) {
       const m = (e as { message?: string }).message ?? "Could not move it.";
       setError(isMissingDraftTables(m) ? MIGRATION_HINT : m);
     } finally {
       setMoving(false);
     }
-  }
-
-  function requestMove(item: TrackerItem, to: BoardColumn) {
-    const plan = planMove(item, to);
-    if (!plan.ok) return setNotice(plan.reason);
-    // Going forward with something still open asks first; going back needs no warning.
-    if ((plan.forward || plan.to === "submitted") && openItems(stageOf(item), workFor(item.id, stageOf(item)), item.draft_brief).length > 0) return setPending({ item, to });
-    doMove({ item, to });
   }
 
   function promptFor(item: TrackerItem): string {
@@ -201,26 +162,19 @@ export default function DraftApplication() {
     });
   }
 
-  async function copyPrompt(item: TrackerItem) {
-    try {
-      await navigator.clipboard.writeText(promptFor(item));
-      setCopiedId(item.id);
-      window.setTimeout(() => setCopiedId((c) => (c === item.id ? null : c)), 2500);
-    } catch {
-      // Clipboard access can fail in some browser contexts — still open the project.
-    }
-    window.open(CLAUDE_PROJECT_URL, "_blank", "noopener,noreferrer");
-  }
+  // The viewer's open action points (incl. review / input requests), per application.
+  const mineById = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const a of myOpenActions(actions, viewer)) map.set(a.tracker_item_id, (map.get(a.tracker_item_id) ?? 0) + 1);
+    return map;
+  }, [actions, viewer]);
 
-  const visible = useMemo(
-    () =>
-      items.filter((i) => {
-        if (ownerFilter === "all") return true;
-        const lead = canonicalLead(i.owner);
-        return ownerFilter === "unassigned" ? !lead : lead === ownerFilter;
-      }),
-    [items, ownerFilter]
-  );
+  // Search, then "View as": what they lead, plus anything waiting on them.
+  const visible = useMemo(() => {
+    const words = searchWords(search);
+    const who = canonicalLead(viewer);
+    return items.filter((i) => matches(i, words) && (!who || canonicalLead(i.owner) === who || mineById.has(i.id)));
+  }, [items, search, viewer, mineById]);
 
   const byColumn = useMemo(() => {
     const map = new Map<BoardColumn, TrackerItem[]>(BOARD_COLUMNS.map((c) => [c.key, []]));
@@ -235,23 +189,29 @@ export default function DraftApplication() {
   }, [visible]);
 
   const openItem = items.find((i) => i.id === openId) ?? null;
-  const itemsForPending = pending ? stageOf(pending.item) : null;
+  const myCount = me ? { leads: visible.filter((i) => canonicalLead(i.owner) === me).length, actions: visible.reduce((n, i) => n + (mineById.get(i.id) ?? 0), 0) } : null;
 
   return (
     <div className="flex flex-col gap-4">
-      <section className="flex flex-wrap items-start justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
-        <div className="max-w-3xl">
-          <h2 className="mb-1 text-lg font-semibold text-[var(--ink)]">Draft an application</h2>
-          <p className="text-sm text-[var(--ink-muted)]">
-            Start with what management wants, then write the <strong>Concept</strong> and the <strong>First draft</strong>. Open a card to record management&apos;s guidance, capture what the
-            donor wants and the word limits, paste the draft, run a <strong>Gemini review</strong> or copy the stage prompt to Claude, and keep meeting notes and learnings. Use the toggle
-            on a card (or drag it) to move it along.
-          </p>
-        </div>
-        <label className="flex items-center gap-2 text-sm text-[var(--ink-muted)]">
-          Viewing as
-          <select value={viewer ?? ""} onChange={(e) => writeViewer(e.target.value || null)} className="rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-sm text-neutral-800">
-            <option value="">Choose your name</option>
+      <section className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-5">
+        <h2 className="mb-1 text-lg font-semibold text-[var(--ink)]">Draft an application</h2>
+        <p className="text-sm text-[var(--ink-muted)]">
+          Each card has two buttons: <strong>✨ Claude</strong> for the stage you&apos;re at (start the chat once, paste its link, and everyone opens the same chat) and{" "}
+          <strong>Open workspace</strong> for meeting notes, action points, donor guidance and the history. Use the toggle (or drag the card) to move it along.
+        </p>
+      </section>
+
+      {/* View as + search, like the other tabs */}
+      <div className="flex flex-wrap items-end gap-3 rounded-lg border border-[var(--border)] bg-white p-4">
+        <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-[var(--ink-muted)]">
+          View as
+          <select
+            value={me ?? ""}
+            onChange={(e) => setViewer(e.target.value || null)}
+            aria-label="View as"
+            className="rounded-md border border-neutral-300 px-3 py-2 text-sm normal-case tracking-normal text-neutral-800"
+          >
+            <option value="">Whole team</option>
             {LEADS.map((n) => (
               <option key={n} value={n}>
                 {n}
@@ -259,7 +219,34 @@ export default function DraftApplication() {
             ))}
           </select>
         </label>
-      </section>
+        <label className="flex min-w-[16rem] flex-1 flex-col gap-1 text-xs font-medium uppercase tracking-wide text-[var(--ink-muted)]">
+          Search
+          <span className="relative">
+            <input
+              type="text"
+              enterKeyHint="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && setSearch("")}
+              placeholder="Title, funder, lead or country"
+              aria-label="Search applications"
+              className="w-full rounded-md border border-neutral-300 py-2 pl-8 pr-8 text-sm normal-case tracking-normal text-neutral-800 placeholder:text-neutral-400"
+            />
+            <span aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-neutral-400">⌕</span>
+            {search && (
+              <button type="button" onClick={() => setSearch("")} aria-label="Clear search" className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full px-1 text-base leading-none text-neutral-400 hover:text-neutral-700">
+                ×
+              </button>
+            )}
+          </span>
+        </label>
+        {myCount && (
+          <p className="flex flex-wrap items-center gap-2 pb-2 text-sm text-neutral-700">
+            <PersonChip name={me} /> leads <strong>{myCount.leads}</strong> here
+            {myCount.actions > 0 && <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">✔︎ {myCount.actions} open for {firstName(me)}</span>}
+          </p>
+        )}
+      </div>
 
       {tablesMissing && <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">{MIGRATION_HINT}</div>}
       {error && <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>}
@@ -281,22 +268,6 @@ export default function DraftApplication() {
               {c.icon} {c.label}
             </p>
           </div>
-        ))}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-white">Filter by staff</span>
-        <Pill active={ownerFilter === "all"} onClick={() => setOwnerFilter("all")}>
-          All staff
-        </Pill>
-        <Pill active={ownerFilter === "unassigned"} onClick={() => setOwnerFilter("unassigned")}>
-          Unassigned
-        </Pill>
-        {LEADS.map((owner) => (
-          <Pill key={owner} active={ownerFilter === owner} onClick={() => setOwnerFilter(owner)}>
-            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-neutral-200 text-[9px] font-bold text-neutral-700">{initials(owner)}</span>
-            {owner.split(" ")[0]}
-          </Pill>
         ))}
       </div>
 
@@ -324,7 +295,7 @@ export default function DraftApplication() {
                   e.preventDefault();
                   setDragOver(null);
                   const item = items.find((i) => i.id === e.dataTransfer.getData("text/plain"));
-                  if (item) requestMove(item, col.key);
+                  if (item) moveTo(item, col.key);
                 }}
                 className={`flex min-w-0 flex-col gap-3 rounded-xl p-2 transition-colors ${dragOver === col.key ? "bg-[var(--accent-soft)] ring-2 ring-[var(--accent)]" : "bg-neutral-50"}`}
               >
@@ -341,12 +312,13 @@ export default function DraftApplication() {
                     key={item.id}
                     item={item}
                     work={workFor(item.id, stageOf(item))}
-                    guidanceCount={guidance.filter((g) => g.tracker_item_id === item.id).length}
-                    copied={copiedId === item.id}
+                    viewer={viewer}
+                    forMe={mineById.get(item.id) ?? 0}
                     busy={moving}
+                    prompt={() => promptFor(item)}
+                    onWorkSaved={onWorkSaved}
                     onOpen={() => setOpenId(item.id)}
-                    onCopy={() => copyPrompt(item)}
-                    onMove={(to) => requestMove(item, to)}
+                    onMove={(to) => moveTo(item, to)}
                   />
                 ))}
               </div>
@@ -362,76 +334,46 @@ export default function DraftApplication() {
           guidance={guidance.filter((g) => g.tracker_item_id === openItem.id)}
           notes={notes.filter((n) => n.tracker_item_id === openItem.id)}
           actions={actions.filter((a) => a.tracker_item_id === openItem.id)}
-          learnings={learnings}
           viewer={viewer}
           tablesMissing={tablesMissing}
+          prompt={() => promptFor(openItem)}
           onClose={() => setOpenId(null)}
           onWorkSaved={onWorkSaved}
-          onItemChange={(patch) => onItemChange(openItem.id, patch)}
-          onRequestMove={(to) => requestMove(openItem, to)}
+          onRequestMove={(to) => moveTo(openItem, to)}
           onGuidanceChange={(update) => setGuidance((prev) => update(prev))}
           onNotesChange={(update) => setNotes((prev) => update(prev))}
           onActionsChange={(update) => setActions((prev) => update(prev))}
-          onLearningsChange={(update) => setLearnings((prev) => update(prev))}
-        />
-      )}
-
-      {pending && itemsForPending && (
-        <LiftDialog
-          title={effectiveFields(pending.item).programName || "This opportunity"}
-          from={itemsForPending}
-          to={pending.to}
-          open={openItems(itemsForPending, workFor(pending.item.id, itemsForPending), pending.item.draft_brief)}
-          busy={moving}
-          onCancel={() => setPending(null)}
-          onConfirm={() => doMove(pending)}
         />
       )}
     </div>
   );
 }
 
-function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition ${
-        active ? "border-[var(--accent)] bg-[var(--accent)] text-white" : "border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
 function StageCard({
   item,
   work,
-  guidanceCount,
-  copied,
+  viewer,
+  forMe,
   busy,
+  prompt,
+  onWorkSaved,
   onOpen,
-  onCopy,
   onMove,
 }: {
   item: TrackerItem;
   work: DraftStageWork | null;
-  guidanceCount: number;
-  copied: boolean;
+  viewer: string | null;
+  forMe: number;
   busy: boolean;
+  prompt: () => string;
+  onWorkSaved: (row: DraftStageWork) => void;
   onOpen: () => void;
-  onCopy: () => void;
   onMove: (to: BoardColumn) => void;
 }) {
   const column = columnOf(item);
   const submitted = column === "submitted";
-  const meta = stageMeta(stageOf(item));
   const eff = effectiveFields(item);
-  const ticked = new Set(work?.checklist ?? []);
-  const done = meta.checklist.filter((c) => ticked.has(c.id)).length;
-  const pct = Math.round((done / meta.checklist.length) * 100);
   const due = submitted ? null : daysLeftLabel(eff.deadline);
-  const readiness = work?.review?.readiness;
 
   return (
     <div draggable onDragStart={(e) => e.dataTransfer.setData("text/plain", item.id)} className="flex cursor-grab flex-col gap-2 rounded-lg border border-neutral-200 bg-white p-3 shadow-sm active:cursor-grabbing">
@@ -444,52 +386,19 @@ function StageCard({
       <div className="flex flex-wrap gap-1.5">
         {submitted && item.submission_date && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">Submitted {item.submission_date}</span>}
         {due && <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${due.tone}`}>{due.text}</span>}
+        {eff.lead ? <PersonChip name={eff.lead} /> : <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-500">No lead</span>}
+        {forMe > 0 && <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900">✔︎ {forMe} for you</span>}
         {item.fit_status !== "fit" && (
           <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${item.fit_status === "not_fit" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>
             {item.fit_status === "not_fit" ? "⚠ Not fit (override)" : "⚠ Unreviewed (override)"}
           </span>
         )}
-        {guidanceCount > 0 && (
-          <span title="Management guidance recorded" className="rounded-full bg-orange-50 px-2 py-0.5 text-[11px] font-medium text-[var(--accent)]">
-            🧭 {guidanceCount}
-          </span>
-        )}
-        {typeof readiness === "number" && !submitted && (
-          <span
-            title="Gemini's last review of this stage: how ready it is"
-            className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${readiness >= 75 ? "bg-emerald-100 text-emerald-700" : readiness >= 50 ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-700"}`}
-          >
-            ✨ {readiness}% ready
-          </span>
-        )}
-        {eff.lead && <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600">{eff.lead}</span>}
       </div>
-      {!submitted && (
-        <div title={`${done} of ${meta.checklist.length} checklist items ticked`}>
-          <div className="h-1.5 overflow-hidden rounded-full bg-neutral-100">
-            <div className="h-full rounded-full bg-[var(--accent)] transition-all" style={{ width: `${pct}%` }} />
-          </div>
-          <p className="mt-1 text-[11px] text-neutral-500">
-            {meta.short} checklist {done}/{meta.checklist.length}
-          </p>
-        </div>
-      )}
       <MoveToggle column={column} disabled={busy} onMove={onMove} compact />
-      <div className="flex flex-wrap items-center gap-1.5">
-        <button onClick={onOpen} className="rounded-md bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-neutral-700">
-          Open workspace
-        </button>
-        {!submitted && (
-          <button onClick={onCopy} title={`Copies the ${meta.label.toLowerCase()} prompt and opens your BURN Grant Applications project in Claude`} className="rounded-md border border-neutral-300 px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50">
-            {copied ? "Copied ✓" : "📋 Claude"}
-          </button>
-        )}
-        {item.clickup_url && (
-          <a href={item.clickup_url} target="_blank" rel="noopener noreferrer" title="Open this opportunity in ClickUp" className="rounded-md border border-neutral-300 px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50">
-            ClickUp ↗
-          </a>
-        )}
-      </div>
+      <StageClaude item={item} stage={stageOf(item)} work={work} viewer={viewer} prompt={prompt} onSaved={onWorkSaved} compact readOnly={submitted} />
+      <button onClick={onOpen} className="self-start rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50">
+        Open workspace
+      </button>
     </div>
   );
 }

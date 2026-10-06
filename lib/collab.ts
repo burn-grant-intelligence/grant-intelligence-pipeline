@@ -1,6 +1,6 @@
 // Team collaboration helpers: who gets notified, what shows in a person's
-// desk, and "Remove & discard" — shared by the Application Tracker, the
-// Draft Application workspace and the header bell.
+// desk, and "Remove & discard" — shared by the Application Tracker and the
+// Draft Application workspace.
 // Tables: supabase/team_collaboration_migration_2026-10-06.sql.
 
 import { supabase } from "./supabaseClient";

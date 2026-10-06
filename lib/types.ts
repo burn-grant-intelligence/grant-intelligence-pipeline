@@ -135,6 +135,11 @@ export interface TrackerItem {
   grant_id: string;
   status: TrackerStatus;
   owner: string | null;
+  // "Remove & discard" (supabase/team_collaboration_migration_2026-10-06.sql):
+  // a removed opportunity is hidden in every tab and can be restored.
+  removed_at?: string | null;
+  removed_by?: string | null;
+  removed_reason?: string | null;
   notes: string | null;
   tor_text: string | null;
   // The team's own Fit/Not Fit call for this tracked pursuit — deliberately
@@ -289,11 +294,41 @@ export interface OpportunityNote {
 
 // An action point (action_items table): a task, or a meeting with someone,
 // owned by one person, optionally linked to the meeting notes it came from.
+export type ActionKind = "task" | "meeting" | "review" | "input";
+
+// A reply on an action point (action_replies table).
+export interface ActionReply {
+  id: string;
+  action_id: string;
+  tracker_item_id: string;
+  author: string | null;
+  body: string;
+  created_at: string;
+}
+
+// One notification for one person (team_notifications table).
+export type NotificationKind = "mention" | "everyone" | "reply" | "removed";
+export interface TeamNotification {
+  id: string;
+  recipient: string;
+  kind: NotificationKind;
+  tracker_item_id: string | null;
+  note_id: string | null;
+  action_id: string | null;
+  reply_id: string | null;
+  from_person: string | null;
+  excerpt: string | null;
+  seen_at: string | null;
+  created_at: string;
+}
+
 export interface ActionItem {
   id: string;
   tracker_item_id: string;
   note_id: string | null;
-  kind: "task" | "meeting";
+  // review / input: "please review my proposal", "your input needed"
+  // (supabase/team_collaboration_migration_2026-10-06.sql)
+  kind: ActionKind;
   description: string;
   meeting_with: string | null;
   assignee: string | null;

@@ -1,0 +1,80 @@
+# Core grants search (2026-10-06) — used by scripts/gemini_discover.py on every
+# Tuesday/Friday "Gemini discovery" run, BEFORE the rest of the run (fixed
+# sources, longlist, broad search, events), so BURN's core business is always
+# searched first even if the run later runs short of time.
+#
+# The order is BURN's order of priority:
+#
+#   1. clean_cooking  — clean cooking calls, the core business. Every search
+#      below is run. If they turn up fewer than `fallback.min_saved` new open
+#      clean-cooking calls, the `fallback` searches run as well: year-specific
+#      "call for proposals / call for projects / call for ideas" searches, so
+#      a thin week still looks hard for clean cooking.
+#   2. large_ticket   — large-ticket, catalytic and results-based funding, not
+#      only clean cooking: calls for proposals / projects / ideas for this
+#      year and next, RBF, catalytic / concessional / blended windows,
+#      business-partnership facilities. `priority_funders` are checked on
+#      EVERY run (FID, DIV, DGBP, …) so a big open call is never missed.
+#   3. The rest comes after: config/sources.yaml fixed pages, the rotating
+#      longlist in config/funding_sources.yaml, the broad search and events.
+#
+# Placeholders in the searches: {year} = this year, {next_year} = next year
+# (calls for next year are often advertised from September).
+#
+# Each search is one Gemini Google-Search call returning up to
+# `per_search` candidates; at most `max_to_read` new candidates per tier are
+# then read (one Gemini call each). Candidates already in the Grant Scanner
+# (same link, or ~75% the same title) are dropped before reading.
+# Add, remove or reword freely; no code change needed.
+
+clean_cooking:
+  label: "Clean cooking calls (core business)"
+  per_search: 6
+  max_to_read: 20
+  searches:
+    - "clean cooking call for proposals {year} {next_year} — cookstoves, improved biomass, LPG, bioethanol, biogas, electric / induction cooking (eCooking)"
+    - "results-based financing (RBF) for clean cooking or cookstoves — open call or funding round {year}"
+    - "clean cooking challenge fund, facility or grant window open for applications {year} — e.g. Modern Cooking Facility for Africa, Clean Cooking Alliance, ESMAP Clean Cooking Fund, EnDev, BGFA"
+    - "eCooking / electric pressure cooker / induction cooking scale-up grant or call for proposals {year} Africa"
+    - "institutional and school cooking programme — call for proposals, tender or RFP for clean cookstoves {year}"
+    - "clean cooking carbon finance — advance purchase, offtake, Article 6 or carbon pre-finance facility open call {year}"
+  fallback:
+    # Run only when the searches above save fewer than this many new open
+    # clean-cooking calls in this run.
+    min_saved: 3
+    searches:
+      - "\"call for proposals\" {year} clean cooking"
+      - "\"call for projects\" {year} cookstoves OR \"clean cooking\""
+      - "\"call for ideas\" {year} clean cooking OR cooking energy"
+      - "\"request for proposals\" {year} cookstove distribution OR manufacturing Africa"
+      - "\"expression of interest\" {year} clean cooking Kenya OR Tanzania OR Ghana OR Zambia OR Nigeria"
+
+large_ticket:
+  label: "Large-ticket, catalytic & results-based funding"
+  per_search: 6
+  max_to_read: 20
+  searches:
+    - "\"calls for proposals\" {year} {next_year} energy access OR clean energy — private companies in Africa eligible, grants of USD 500,000 or more"
+    - "\"call for projects\" {year} climate mitigation OR energy transition — developing countries, private sector, large grants"
+    - "\"call for ideas\" OR \"call for innovations\" {year} — scaling proven innovations in developing countries, grants for established companies"
+    - "results-based financing call {year} energy access, appliances or climate — Africa"
+    - "catalytic, concessional or blended finance facility — open call for private sector projects {year} Africa energy or climate"
+    - "business partnership grant facility for companies in developing countries — open call {year} (e.g. Danida Green Business Partnerships, GIZ develoPPP, P4G)"
+    - "local manufacturing, industrialisation or green jobs — call for proposals {year} Africa"
+    - "gender and climate / women's economic empowerment — call for proposals for companies {year} Africa energy"
+  # Checked on EVERY run. With a url, that page is read directly; without
+  # one, Gemini searches for the funder's currently open call by name.
+  # (Pages listed here are skipped in the funding_sources.yaml rotation.)
+  priority_funders:
+    - { name: "Fund for Innovation in Development (FID)" }
+    - { name: "Development Innovation Ventures (DIV)" }
+    - { name: "DANIDA Green Business Partnerships (DGBP)", url: "https://danida-business-partnerships.dk/dgbp/" }
+    - { name: "Modern Cooking Facility for Africa (MCFA)", url: "https://www.moderncooking.africa/apply-for-funding/" }
+    - { name: "Beyond the Grid Fund for Africa (BGFA)", url: "https://beyondthegrid.africa/funding-rounds/" }
+    - { name: "Clean Cooking Alliance — funding opportunities", url: "https://cleancooking.org/funding-opportunities/" }
+    - { name: "ESMAP Clean Cooking Fund (World Bank)" }
+    - { name: "GIZ develoPPP" }
+    - { name: "EEP Africa (Energy and Environment Partnership Trust Fund)" }
+    - { name: "Africa Enterprise Challenge Fund (AECF)" }
+    - { name: "Transforming Energy Access (TEA)" }
+    - { name: "P4G Partnerships", url: "https://p4gpartnerships.org/" }

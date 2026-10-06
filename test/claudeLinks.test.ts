@@ -1,39 +1,58 @@
-// One Claude chat per application stage (Draft Application tab).
-//
-// claude.ai can't hand the app back the link of a chat it opens, so the flow
-// is: "Start in Claude" copies the stage prompt and opens BURN's Claude
-// project → the writer pastes the new chat's link back → from then on the
-// stage's button opens that same chat for everyone. Pure helpers, covered by
-// test/claudeLinks.test.ts. Needs supabase/draft_claude_links_migration_2026-10-07.sql.
+// Run: npx tsx test/claudeLinks.test.ts
+// One Claude chat per draft stage (lib/claudeLinks.ts) and the workspace History timeline.
+process.env.NEXT_PUBLIC_SUPABASE_URL ||= "http://127.0.0.1:1";
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= "test";
 
-import type { DraftStage, DraftStageWork } from "./types";
+async function main() {
+  const { claudeState, cleanClaudeUrl, stageWord } = await import("../lib/claudeLinks");
+  const { historyEntries } = await import("../components/DraftWorkspace");
+  let failed = 0;
+  const check = (ok: boolean, label: string) => {
+    if (!ok) failed++;
+    console.log(`${ok ? "PASS" : "FAIL"}  ${label}`);
+  };
 
-const CLAUDE_HOSTS = /(^|\.)claude\.(ai|com)$/i;
+  // ── pasted links ──
+  check(cleanClaudeUrl("https://claude.ai/chat/abc-123").url === "https://claude.ai/chat/abc-123", "a claude.ai chat link is kept");
+  check(cleanClaudeUrl("  Here's the chat: https://claude.ai/chat/xyz). ").url === "https://claude.ai/chat/xyz", "link pulled out of pasted text, trailing punctuation dropped");
+  check(cleanClaudeUrl("claude.ai/project/123/chat").url === "https://claude.ai/project/123/chat", "missing https:// is added");
+  check(cleanClaudeUrl("http://claude.ai/chat/1").url === "https://claude.ai/chat/1", "http becomes https");
+  check(!!cleanClaudeUrl("https://www.claude.com/x").url, "claude.com allowed");
+  check(cleanClaudeUrl("https://burn.sharepoint.com/doc").url === null && /sharepoint/.test(cleanClaudeUrl("https://burn.sharepoint.com/doc").error ?? ""), "non-Claude link refused with a reason");
+  check(cleanClaudeUrl("https://evilclaude.ai/x").url === null, "look-alike domain refused");
+  check(cleanClaudeUrl("not a link").url === null && !!cleanClaudeUrl("not a link").error, "plain text refused");
+  check(cleanClaudeUrl("   ").url === null && cleanClaudeUrl("   ").error === null, "empty is just empty");
 
-/** A pasted Claude chat / project / Cowork link, cleaned — or why it was refused. */
-export function cleanClaudeUrl(raw: string): { url: string | null; error: string | null } {
-  const text = raw.trim();
-  if (!text) return { url: null, error: null };
-  // People often paste "Here's the chat: https://…" — take the first link in it.
-  const found = /https?:\/\/\S+/i.exec(text)?.[0] ?? (/^[\w.-]+\.\w+\//.test(text) ? `https://${text}` : text);
-  let u: URL;
-  try {
-    u = new URL(found.replace(/[)\].,>]+$/, ""));
-  } catch {
-    return { url: null, error: "That isn't a link. Copy the chat's address from Claude (it starts with https://claude.ai/…)." };
-  }
-  if (!CLAUDE_HOSTS.test(u.hostname)) return { url: null, error: `That's a ${u.hostname} link. Paste the Claude chat link (https://claude.ai/…).` };
-  u.protocol = "https:";
-  return { url: u.toString(), error: null };
+  // ── button state ──
+  check(claudeState(null) === "new", "no row → Start");
+  check(claudeState({ claude_url: null, claude_started_at: "2026-10-06T10:00:00Z" }) === "started", "started, no link yet");
+  check(claudeState({ claude_url: "https://claude.ai/chat/1", claude_started_at: null }) === "linked", "linked → Open chat");
+  check(stageWord("concept") === "concept" && stageWord("first_draft") === "first draft" && stageWord("submitted") === "first draft", "stage words");
+
+  // ── history ──
+  const item = {
+    id: "t1", status: "drafting", submission_date: null,
+    grant: { eligibility_checked_at: "2026-10-01T08:00:00Z", eligibility_verdict: "needs_review", eligibility_report: { summary: "Country unclear." } },
+  } as never;
+  const entries = historyEntries({
+    item,
+    notes: [{ id: "n1", tracker_item_id: "t1", meeting_date: "2026-10-02", notes: "Hussein to call the donor.", author: "Sammy Mwathi", stage: null, created_at: "2026-10-02T09:00:00Z", updated_at: "" }],
+    actions: [
+      { id: "a1", tracker_item_id: "t1", note_id: null, kind: "review", origin: "eligibility_review", description: "Sammy, the eligibility check needs your further review.", meeting_with: null, assignee: "Sammy Mwathi", due_date: null, done: true, done_at: null, created_by: "Eligibility check", created_at: "2026-10-01T08:00:01Z" },
+      { id: "a2", tracker_item_id: "t1", note_id: null, kind: "task", description: "Budget draft", meeting_with: null, assignee: "Hussein Kiarie", due_date: null, done: false, done_at: null, created_by: "Sammy Mwathi", stage: "concept", created_at: "2026-10-03T09:00:00Z" },
+    ],
+    replies: [{ id: "r1", action_id: "a1", author: "Sammy Mwathi", body: "✓ Fits — partner covers it", created_at: "2026-10-01T12:00:00Z" }],
+    moves: [{ id: "m1", tracker_item_id: "t1", from_stage: null, to_stage: "concept", moved_by: "Sammy Mwathi", open_items: [], moved_at: "2026-10-04T09:00:00Z" }],
+    works: [{ id: "w1", tracker_item_id: "t1", stage: "concept", claude_url: "https://claude.ai/chat/1", claude_url_by: "Sammy Mwathi", claude_url_at: "2026-10-05T09:00:00Z" } as never],
+    guidance: [{ id: "g1", tracker_item_id: "t1", guidance_date: "2026-10-04", source: "Donor meeting", given_by: "PO", text: "Lead with Kenya", author: "Bornventure Kinoti", created_at: "2026-10-04T10:00:00Z" }],
+  });
+  check(entries.length === 8, `all 8 things in one timeline (${entries.length})`);
+  check(entries[0].text.startsWith("Linked the concept") && entries[entries.length - 1].text.startsWith("Needs further review"), "newest first, eligibility check oldest");
+  check(entries.find((e) => e.key === "n-n1")?.where === "Application Tracker", "a note written in the Application Tracker says so");
+  check(entries.find((e) => e.key === "a-a1")?.kind === "eligibility" && entries.find((e) => e.key === "r-r1")?.icon === "🟢", "eligibility review and its Fit reply are under Eligibility");
+  check(entries.find((e) => e.key === "a-a2")?.where === "Draft · Concept" && /open · for Hussein/.test(entries.find((e) => e.key === "a-a2")?.extra ?? ""), "drafting action point shows stage and who it's for");
+
+  console.log(failed ? `\n${failed} FAILED` : "\nAll passed");
+  process.exit(failed ? 1 : 0);
 }
-
-export type ClaudeState = "linked" | "started" | "new";
-
-/** linked: a chat link is saved · started: someone pressed Start but no link yet · new */
-export function claudeState(work: Pick<DraftStageWork, "claude_url" | "claude_started_at"> | null | undefined): ClaudeState {
-  if (work?.claude_url) return "linked";
-  if (work?.claude_started_at) return "started";
-  return "new";
-}
-
-export const stageWord = (stage: DraftStage | "submitted") => (stage === "first_draft" || stage === "submitted" ? "first draft" : "concept");
+main();

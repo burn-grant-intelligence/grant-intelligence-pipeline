@@ -19,6 +19,10 @@
 #   {award_theme}                     one entry of config/sources.yaml `award_themes` (award_discovery only)
 #   {max_awards_per_theme}            MAX_AWARDS_PER_THEME (award_discovery only)
 #   {award_grace_days}                AWARD_GRACE_DAYS (award prompts only)
+#   {year}, {next_year}               this year and next (e.g. 2026, 2027)
+#   {grant_search}                    one search or priority funder from config/grant_search.yaml (grant_discovery only)
+#   {grant_tier_label}                that search's tier label, e.g. "Clean cooking calls (core business)" (grant_discovery only)
+#   {max_grants_per_search}           the tier's per_search limit (grant_discovery only)
 #
 # Any other braces — e.g. the JSON examples — are left exactly as written, so
 # write them normally (single braces, no escaping). Only lowercase
@@ -529,6 +533,12 @@ opportunity_extraction: |-
     "call_status": "open" | "forthcoming" | "closed" | "ongoing_programme"
   }
 
+  Rules for "amount" and "currency":
+  - "amount": the largest grant / award available to ONE applicant or project if the page states it (for "EUR 200,000 – 2,000,000" use 2000000);
+    if only the total funding pool is stated, use that. A plain number, no text. null if no figure is stated.
+  - "currency": the ISO code as stated (USD, EUR, GBP, DKK, SEK, NOK, CHF, KES, …). The Grant Scanner uses these two fields to show
+    large-ticket calls in their own section, so do not leave a stated figure out.
+
   Rules for "call_status" (required on every item):
   - "open": an advertised call, RFP, EOI, tender, funding round, challenge or application window that is accepting applications today, with a way to apply
     (a deadline not yet passed, or an explicit "applications open" / "rolling — apply now" statement).
@@ -756,6 +766,73 @@ event_extraction: |
 # award_discovery runs once per theme in config/sources.yaml `award_themes`;
 # {award_theme} is filled per call. award_extraction reads one award page.
 # ---------------------------------------------------------------------------
+
+# Discovery (Google Search) — the CORE GRANTS SEARCH: one search from
+# config/grant_search.yaml (clean cooking first, then large-ticket / catalytic
+# / RBF), or one priority funder's currently open call. Runs before
+# everything else on each Gemini discovery run.
+grant_discovery: |
+  Today's date is {today}. Use Google Search to find up to {max_grants_per_search} funding calls that are CURRENTLY OPEN for applications
+  and that the company described below could apply to.
+
+  {burn_profile}
+
+  THIS SEARCH ({grant_tier_label}):
+  {grant_search}
+
+  Search this thoroughly — several queries, not one. Combine its keywords with "call for proposals", "call for projects", "call for ideas",
+  "request for proposals", "expression of interest", "funding round", "applications open", "deadline", "{year}" and "{next_year}"; with
+  "Africa"; and with each of these priority countries in turn:
+  {geography_priority}
+  Large funding pools matter most: prefer calls offering substantial grants, results-based payments or catalytic / concessional funding
+  (hundreds of thousands to millions of USD/EUR) over small grants, but include smaller open calls that fit well.
+
+  WHAT COUNTS
+  An advertised call BURN can SUBMIT to right now: a live call for proposals / projects / ideas, RFP, EOI, tender, results-based financing
+  call, funding round, challenge-fund window or application window, with a route to apply and a deadline not yet passed (or an explicit
+  "applications open — rolling" statement). It provides money or a contract TO the applicant.
+  It is NOT:
+  - a programme, fund or facility page with no call currently open, or an "ongoing programme";
+  - a forthcoming / "coming soon" / pre-announced round not yet accepting applications;
+  - a closed call, past round, list of funded projects, or news that funding was awarded;
+  - an event, webinar, course or accelerator the company would pay for;
+  - a consultant roster, staff vacancy, or an RFP to evaluate someone else's programme.
+  If you cannot point to the open call itself (its page, deadline or "applications open" statement, and the route to apply), leave it out.
+
+  When this search names one funder, find THAT funder's currently open call(s) — its current round, call for proposals or application
+  window — and return nothing if none is open today. A funder being active is not an open call.
+
+  ALSO LEAVE OUT
+  - Agriculture, forestry or land-use calls (on-farm equipment, crops, livestock, agri-processing) unless they specifically fund clean cookstoves.
+  - Biodiversity / nature-conservation calls, health, medical, biotech, journalism, human-rights or other off-sector calls.
+  - Micro-loans, or calls reserved for start-ups, pre-revenue, first-time or very small operators that an established manufacturer cannot enter.
+  - Calls restricted to one non-African country with no route for African applicants or projects.
+  - Equity-only investment with no grant, RBF or concessional element (unless clearly a call BURN applies to).
+
+  Funders whose open calls are especially wanted (not clean-cooking only):
+  {funder_watchlist}
+
+  URL RULES
+  - "url" must be the official call page found through search — not a news article, aggregator, social-media post or search-result link when an
+    official page exists. Never invent or construct a URL.
+  - Do not list the same call twice (reposts, translations, or the same call with slightly different wording are ONE candidate).
+
+  OUTPUT
+  Respond with ONLY a JSON object — no markdown fences and no prose — of exactly this shape:
+  {
+    "candidates": [
+      {
+        "title": "The call's actual name, e.g. Clean Cooking RBF Call for Proposals 2026",
+        "url": "Official call page",
+        "funder": "Funder or issuing organisation",
+        "deadline": "Confirmed deadline (YYYY-MM-DD) or 'Rolling'",
+        "amount": "Funding available per project or in total, as stated, or null",
+        "geography": "Eligible countries / region / Global",
+        "why_relevant": "One sentence on the concrete link to BURN"
+      }
+    ]
+  }
+  If nothing qualifies, respond with exactly: { "candidates": [] }
 
 # Discovery (Google Search) — finds candidate awards, prizes and competitions for ONE theme.
 award_discovery: |

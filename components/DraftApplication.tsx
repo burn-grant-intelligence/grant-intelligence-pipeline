@@ -88,7 +88,8 @@ export default function DraftApplication() {
       .or("fit_status.eq.fit,draft_override.eq.true")
       .order("updated_at", { ascending: false });
     if (fetchError) setError(fetchError.message);
-    const list = (data as unknown as TrackerItem[]) ?? [];
+    // "Remove & discard" in the Application Tracker hides an opportunity everywhere.
+    const list = ((data as unknown as TrackerItem[]) ?? []).filter((i) => !i.removed_at);
     setItems(list);
     if (list.length) {
       const ids = list.map((i) => i.id);

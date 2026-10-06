@@ -7,7 +7,6 @@ import EligibilityTracker from "@/components/EligibilityTracker";
 import DraftApplication from "@/components/DraftApplication";
 import EventsScanner from "@/components/EventsScanner";
 import ManagementDashboard from "@/components/ManagementDashboard";
-import DeskBell from "@/components/DeskBell";
 
 type Tab = "scanner" | "tracker" | "eligibility" | "draft" | "events" | "dashboard";
 
@@ -54,15 +53,7 @@ export default function Home() {
             ))}
           </nav>
 
-          <div className="flex items-center gap-3">
-            {/* Your desk (open action points, tags, replies) — on every tab */}
-            <DeskBell
-              onOpen={() => {
-                setTab("tracker");
-                window.scrollTo({ top: 0, behavior: "smooth" });
-              }}
-            />
-          </div>
+          <div className="flex items-center gap-3" />
         </div>
       </header>
 

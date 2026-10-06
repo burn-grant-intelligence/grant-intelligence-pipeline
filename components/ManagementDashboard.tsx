@@ -98,7 +98,8 @@ export default function ManagementDashboard() {
       .select("*, grant:grants(*)")
       .order("updated_at", { ascending: false });
     if (fetchError) setError(fetchError.message);
-    setItems((data as unknown as TrackerItem[]) ?? []);
+    // "Remove & discard" in the Application Tracker hides an opportunity everywhere.
+    setItems(((data as unknown as TrackerItem[]) ?? []).filter((i) => !i.removed_at));
     setLoading(false);
   }
 

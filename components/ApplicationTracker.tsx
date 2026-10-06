@@ -10,6 +10,7 @@ import { isLive, removeOpportunity, restoreOpportunity } from "@/lib/collab";
 import { setViewer, useViewer } from "@/lib/viewer";
 import { KIND_BADGE, kindOf } from "@/lib/opportunityType";
 import { findSimilarTitle } from "@/lib/titleSimilarity";
+import { applyReviewPlan, planReviewSync } from "@/lib/eligibilityReview";
 
 const STATUS_LABELS: Record<TrackerStatus, string> = {
   tracking: "Tracking",
@@ -59,8 +60,14 @@ export default function ApplicationTracker() {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    loadData();
-    loadNotesAndActions();
+    // Then make sure every opportunity the eligibility check flagged "Needs
+    // further review" has a 👀 review action point with its lead.
+    Promise.all([loadData(), loadNotesAndActions()]).then(async ([loaded, acts]) => {
+      if (!loaded || !acts) return;
+      const res = await applyReviewPlan(supabase, planReviewSync(loaded, acts));
+      if (res.created.length || res.closed.length) reloadActions();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const reloadActions = useCallback(async () => {
@@ -81,6 +88,7 @@ export default function ApplicationTracker() {
     );
     setNotes((n.data as OpportunityNote[]) ?? []);
     setActions((a.data as ActionItem[]) ?? []);
+    return a.error ? null : ((a.data as ActionItem[]) ?? []);
   }
 
   const chooseViewer = (name: string) => setViewer(name || null);
@@ -147,6 +155,7 @@ export default function ApplicationTracker() {
     if (fetchError) setError(fetchError.message);
     setItems((data as unknown as TrackerItem[]) ?? []);
     setLoading(false);
+    return fetchError ? null : ((data as unknown as TrackerItem[]) ?? []);
   }
 
   const liveItems = useMemo(() => items.filter(isLive), [items]);

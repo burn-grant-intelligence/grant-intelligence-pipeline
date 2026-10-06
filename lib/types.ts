@@ -337,6 +337,9 @@ export interface ActionItem {
   done_at: string | null;
   created_by: string | null;
   stage?: DraftStage | null; // set when written in the Draft Application workspace
+  // "eligibility_review": created by the app when the eligibility check needs
+  // the lead's review (lib/eligibilityReview.ts). Null for action points people write.
+  origin?: string | null;
   created_at: string;
 }
 

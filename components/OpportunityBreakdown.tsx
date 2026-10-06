@@ -10,18 +10,29 @@
 //   2. Meeting notes by date, each with its action points (who, what, by
 //      when). Notes can be emailed from your own mail app, and a meeting
 //      action point can be saved as a calendar invite so Outlook reminds you.
+//      Typing a teammate's name (Hussein, @Sammy, @Everyone) tags them: it is
+//      coloured as you type, a sentence tagging one person is offered as an
+//      action point, and the person sees it in their desk
+//      (components/TeamInbox.tsx). Action points can be review / input
+//      requests, assigned to Everyone, and replied to (with tags).
 // Everything entered here is what the Management Dashboard's "Opportunity
 // pipeline" tab shows and exports to Excel.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
-  FUNDING_TYPES, LEADS, PIPELINE_CATEGORIES, PIPELINE_STATUSES, PRODUCT_TYPES, STATUS_GROUPS,
-  canonicalLead, cleanClickUpUrl, dueState, effectiveFields, emailOf, fmtDate, meetingIcs, money, notesEmailLink, todayIso, trackerStatusFor,
+  EVERYONE, FUNDING_TYPES, LEADS, PIPELINE_CATEGORIES, PIPELINE_STATUSES, PRODUCT_TYPES, STATUS_GROUPS,
+  canonicalLead, cleanClickUpUrl, dueState, effectiveFields, emailOf, firstName, fmtDate, meetingIcs, money, notesEmailLink, todayIso, trackerStatusFor,
   type DueState,
 } from "@/lib/pipeline";
+import { mentionsIn, recipientsFor, suggestActions, tagColor } from "@/lib/mentions";
+import {
+  ACTION_KINDS, actionNotifications, friendlyError, kindIcon, kindLabel, noteNotifications, replyNotifications, sendNotifications,
+  type NotificationDraft,
+} from "@/lib/collab";
+import { MentionText, MentionTextarea } from "@/components/Mentions";
 import { normalizeStage } from "@/lib/drafting";
-import type { ActionItem, DraftStage, Grant, OpportunityNote, PipelineStatusCode, TrackerItem } from "@/lib/types";
+import type { ActionItem, ActionKind, ActionReply, DraftStage, Grant, OpportunityNote, PipelineStatusCode, TrackerItem } from "@/lib/types";
 
 // Short stage names for the badges on notes written in the Draft Application workspace.
 const STAGE_BADGE: Record<DraftStage, string> = { concept: "💡 Concept", first_draft: "✍️ First draft" };
@@ -356,8 +367,39 @@ export default function OpportunityBreakdown({
 
 // ───────────────────────── notes & action points ─────────────────────────
 
-type DraftAction = { kind: "task" | "meeting"; description: string; meeting_with: string; assignee: string; due_date: string };
-const emptyDraft = (viewer: string | null): DraftAction => ({ kind: "task", description: "", meeting_with: "", assignee: viewer ?? "", due_date: "" });
+type DraftAction = { kind: ActionKind; description: string; meeting_with: string; assignee: string; due_date: string; autoAssign: boolean };
+// The assignee follows the person tagged in the text until you pick one yourself.
+const emptyDraft = (viewer: string | null, over: Partial<DraftAction> = {}): DraftAction => ({ kind: "task", description: "", meeting_with: "", assignee: viewer ?? "", due_date: "", autoAssign: true, ...over });
+
+function withAutoAssign(d: DraftAction, viewer: string | null): DraftAction {
+  if (!d.autoAssign) return d;
+  const people = mentionsIn(d.description);
+  const tagged = people.length === 1 ? people[0] : null;
+  return { ...d, assignee: tagged ?? viewer ?? "" };
+}
+
+// Replies on the action points of these opportunities (action_replies).
+function useReplies(trackerItemIds: string[]) {
+  const [replies, setReplies] = useState<ActionReply[]>([]);
+  const key = trackerItemIds.join(",");
+  useEffect(() => {
+    if (!key) return;
+    let cancelled = false;
+    supabase
+      .from("action_replies")
+      .select("*")
+      .in("tracker_item_id", key.split(","))
+      .order("created_at", { ascending: true })
+      .then(({ data }) => {
+        if (!cancelled) setReplies((data ?? []) as ActionReply[]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+  return [replies, setReplies] as const;
+}
+export { useReplies };
 
 // Also used by the Draft Application workspace (components/DraftWorkspace.tsx)
 // with `stage`: new notes and action points are tagged with that stage, and
@@ -390,17 +432,22 @@ export function NotesSection({
   const [drafts, setDrafts] = useState<DraftAction[]>([]);
   const [saving, setSaving] = useState(false);
   const [quick, setQuick] = useState<DraftAction | null>(null);
+  const [replies, setReplies] = useReplies([item.id]);
+  const [sent, setSent] = useState<string | null>(null);
 
   const narrow = !!stage && onlyStage;
   const shownNotes = narrow ? notes.filter((n) => n.stage && normalizeStage(n.stage) === stage) : notes;
   const sortedNotes = [...shownNotes].sort((a, b) => b.meeting_date.localeCompare(a.meeting_date) || b.created_at.localeCompare(a.created_at));
   const looseActions = actions.filter((a) => (!a.note_id || !notes.some((n) => n.id === a.note_id)) && (!narrow || (a.stage && normalizeStage(a.stage) === stage)));
   const missingTables = (m: string) =>
-    /opportunity_notes|action_items|schema cache|does not exist|permission denied/i.test(m)
+    /opportunity_notes|action_items|schema cache|does not exist|permission denied/i.test(m) && !/kind|replies|notifications/i.test(m)
       ? "The notes tables are missing or locked — run supabase/opportunity_pipeline_migration_2026-10-01.sql in Supabase first."
       : stage && /stage/i.test(m)
         ? "The notes can't be tagged with a stage yet — run supabase/draft_stages_migration_2026-10-02.sql in Supabase first."
-        : m;
+        : friendlyError(m);
+
+  // Sentences in the notes that tag one person, not yet added as action points.
+  const suggestions = suggestActions(text).filter((s) => !drafts.some((d) => d.description.trim() === s.description));
 
   const toRow = (d: DraftAction, noteId: string | null) => ({
     tracker_item_id: item.id,
@@ -413,6 +460,14 @@ export function NotesSection({
     created_by: viewer,
     ...(stage ? { stage } : {}),
   });
+
+  // Tagged people hear about it in their desk.
+  async function notify(drafts: NotificationDraft[]) {
+    const err = await sendNotifications(drafts);
+    if (err) return onError(err);
+    const people = [...new Set(drafts.map((d) => firstName(d.recipient)))];
+    setSent(people.length ? `Tagged ${people.join(", ")} — they'll see it in their desk.` : null);
+  }
 
   async function saveNote() {
     if (!text.trim()) return;
@@ -428,12 +483,19 @@ export function NotesSection({
       return onError(missingTables(error?.message ?? "Could not save the notes."));
     }
     onNotesChange((prev) => [note as OpportunityNote, ...prev]);
+    const pending: NotificationDraft[] = noteNotifications(note as OpportunityNote, viewer);
     const rows = drafts.filter((d) => d.description.trim()).map((d) => toRow(d, note.id));
     if (rows.length) {
       const { data: saved, error: aErr } = await supabase.from("action_items").insert(rows).select();
       if (aErr) onError(missingTables(aErr.message));
-      else onActionsChange((prev) => [...prev, ...((saved ?? []) as ActionItem[])]);
+      else {
+        const list = (saved ?? []) as ActionItem[];
+        onActionsChange((prev) => [...prev, ...list]);
+        // someone tagged in the notes AND an action point hears about it once
+        for (const a of list) for (const n of actionNotifications(a, viewer)) if (!pending.some((p) => p.recipient === n.recipient)) pending.push(n);
+      }
     }
+    await notify(pending);
     setSaving(false);
     setAdding(false);
     setText("");
@@ -447,6 +509,7 @@ export function NotesSection({
     if (error) return onError(missingTables(error.message));
     onActionsChange((prev) => [...prev, data as ActionItem]);
     setQuick(null);
+    await notify(actionNotifications(data as ActionItem, viewer));
   }
 
   async function toggleDone(a: ActionItem) {
@@ -471,6 +534,20 @@ export function NotesSection({
     onActionsChange((prev) => prev.map((x) => (x.note_id === n.id ? { ...x, note_id: null } : x)));
   }
 
+  const row = (a: ActionItem) => (
+    <ActionRow
+      key={a.id}
+      a={a}
+      opportunity={opportunity}
+      viewer={viewer}
+      onToggle={toggleDone}
+      onRemove={removeAction}
+      replies={replies.filter((r) => r.action_id === a.id)}
+      onReplied={(r) => setReplies((prev) => [...prev, r])}
+      onError={onError}
+    />
+  );
+
   return (
     <section className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -490,6 +567,13 @@ export function NotesSection({
             + Action point
           </button>
           <button
+            onClick={() => setQuick(quick ? null : emptyDraft(viewer, { kind: "review", assignee: "", autoAssign: true }))}
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50"
+            title="Ask someone to review your work, or ask for input or help — type their name to tag them"
+          >
+            👀 Ask for review / input
+          </button>
+          <button
             onClick={() => {
               setAdding(!adding);
               if (!adding && drafts.length === 0) setDrafts([emptyDraft(viewer)]);
@@ -501,12 +585,21 @@ export function NotesSection({
         </div>
       </div>
 
+      {sent && (
+        <p className="flex items-center justify-between rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+          {sent}
+          <button onClick={() => setSent(null)} className="text-emerald-700 hover:text-emerald-900" aria-label="Dismiss">✕</button>
+        </p>
+      )}
+
       {quick && (
         <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
-          <DraftActionRow draft={quick} onChange={setQuick} />
+          <DraftActionRow draft={quick} viewer={viewer} onChange={setQuick} />
           <div className="flex justify-end gap-2">
             <button onClick={() => setQuick(null)} className="text-xs text-neutral-500 hover:text-neutral-800">Cancel</button>
-            <button onClick={saveQuick} disabled={!quick.description.trim()} className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40">Save action point</button>
+            <button onClick={saveQuick} disabled={!quick.description.trim()} className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40">
+              {quick.kind === "review" || quick.kind === "input" ? "Send request" : "Save action point"}
+            </button>
           </div>
         </div>
       )}
@@ -518,13 +611,41 @@ export function NotesSection({
             <input type="date" value={meetingDate} onChange={(e) => setMeetingDate(e.target.value)} className={`${baseInput} w-auto`} />
             {!viewer && <span className="text-xs text-amber-700">Tip: pick your name in “Viewing as” so notes show who wrote them.</span>}
           </div>
-          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} placeholder="What was discussed, decisions taken…" className={inputCls} />
+          <MentionTextarea
+            value={text}
+            onChange={setText}
+            minRows={5}
+            ariaLabel="Meeting notes"
+            placeholder="What was discussed, decisions taken… e.g. Hussein will help facilitate the donor meeting"
+          />
+          {suggestions.length > 0 && (
+            <div className="flex flex-col gap-1.5 rounded-md border border-dashed border-neutral-300 bg-white p-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-neutral-400">Turn into action points?</p>
+              {suggestions.map((s) => (
+                <button
+                  key={s.description}
+                  type="button"
+                  onClick={() =>
+                    setDrafts((prev) => [
+                      ...prev.filter((d) => d.description.trim()),
+                      emptyDraft(viewer, { description: s.description, assignee: s.person, autoAssign: false }),
+                    ])
+                  }
+                  className="flex items-start gap-2 rounded px-1.5 py-1 text-left text-sm text-neutral-700 hover:bg-neutral-50"
+                >
+                  <span className="mt-0.5 text-xs font-semibold text-[var(--accent)]">＋</span>
+                  <MentionText text={s.description} />
+                </button>
+              ))}
+            </div>
+          )}
           <div className="flex flex-col gap-2">
             <p className="text-xs font-semibold text-neutral-500">Action points</p>
             {drafts.map((d, i) => (
               <DraftActionRow
                 key={i}
                 draft={d}
+                viewer={viewer}
                 onChange={(nd) => setDrafts((prev) => prev.map((x, j) => (j === i ? nd : x)))}
                 onRemove={() => setDrafts((prev) => prev.filter((_, j) => j !== i))}
               />
@@ -548,7 +669,7 @@ export function NotesSection({
       {sortedNotes.map((n) => {
         const noteActions = actions.filter((a) => a.note_id === n.id);
         return (
-          <div key={n.id} className="rounded-lg border border-neutral-200 p-3">
+          <div key={n.id} id={`note-${n.id}`} className="rounded-lg border border-neutral-200 p-3">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-semibold text-neutral-800">
                 {fmtDate(n.meeting_date)}
@@ -556,33 +677,39 @@ export function NotesSection({
                 {n.stage && <span className="ml-2 rounded-full bg-orange-50 px-2 py-0.5 text-[11px] font-medium text-[var(--accent)]">{STAGE_BADGE[normalizeStage(n.stage)]}</span>}
               </p>
               <div className="flex items-center gap-3 text-xs">
-                <a href={notesEmailLink({ opportunity, note: n, actions: noteActions })} className="font-medium text-[var(--accent)] hover:underline" title="Opens your mail app with the notes and action points, addressed to the people responsible">
+                <a
+                  href={notesEmailLink({ opportunity, note: n, actions: noteActions, extraTo: recipientsFor(mentionsIn(n.notes), null).map(emailOf).filter(Boolean) as string[] })}
+                  className="font-medium text-[var(--accent)] hover:underline"
+                  title="Opens your mail app with the notes and action points, addressed to the people responsible and the people tagged"
+                >
                   ✉ Email notes
                 </a>
                 <button onClick={() => removeNote(n)} className="text-neutral-300 hover:text-red-500" title="Delete these notes">✕</button>
               </div>
             </div>
-            <p className="whitespace-pre-wrap text-sm text-neutral-700">{n.notes}</p>
-            {noteActions.length > 0 && (
-              <ul className="mt-3 flex flex-col gap-1.5">
-                {noteActions.map((a) => <ActionRow key={a.id} a={a} opportunity={opportunity} onToggle={toggleDone} onRemove={removeAction} />)}
-              </ul>
-            )}
+            <p className="whitespace-pre-wrap text-sm leading-6 text-neutral-700">
+              <MentionText text={n.notes} />
+            </p>
+            {noteActions.length > 0 && <ul className="mt-3 flex flex-col gap-1.5">{noteActions.map(row)}</ul>}
           </div>
         );
       })}
 
       {looseActions.length > 0 && (
         <div className="rounded-lg border border-neutral-200 p-3">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">Other action points</p>
-          <ul className="flex flex-col gap-1.5">
-            {looseActions.map((a) => <ActionRow key={a.id} a={a} opportunity={opportunity} onToggle={toggleDone} onRemove={removeAction} />)}
-          </ul>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">Other action points &amp; requests</p>
+          <ul className="flex flex-col gap-1.5">{looseActions.map(row)}</ul>
         </div>
       )}
     </section>
   );
 }
+
+const fmtWhen = (iso: string) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${fmtDate(iso.slice(0, 10))}, ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
 
 export function ActionRow({
   a,
@@ -590,51 +717,156 @@ export function ActionRow({
   onToggle,
   onRemove,
   showOpportunity,
+  viewer = null,
+  replies,
+  onReplied,
+  onError,
+  startOpen = false,
 }: {
   a: ActionItem;
   opportunity: string;
   onToggle: (a: ActionItem) => void;
   onRemove?: (a: ActionItem) => void;
   showOpportunity?: boolean;
+  viewer?: string | null;
+  /** Given → the row shows its replies and a reply box. */
+  replies?: ActionReply[];
+  onReplied?: (r: ActionReply) => void;
+  onError?: (msg: string | null) => void;
+  startOpen?: boolean;
 }) {
+  const [open, setOpen] = useState(startOpen);
+  const [draft, setDraft] = useState("");
+  const [posting, setPosting] = useState(false);
+  const icon = kindIcon(a.kind);
+  const isRequest = a.kind === "review" || a.kind === "input";
+  const mine = !!viewer && (canonicalLead(a.assignee) === canonicalLead(viewer) || a.assignee === EVERYONE);
+
+  async function postReply(markDone: boolean) {
+    const body = draft.trim();
+    if (!body) return;
+    setPosting(true);
+    const { data, error } = await supabase
+      .from("action_replies")
+      .insert({ action_id: a.id, tracker_item_id: a.tracker_item_id, author: viewer, body })
+      .select()
+      .single();
+    if (error || !data) {
+      setPosting(false);
+      return onError?.(friendlyError(error?.message ?? "Could not save the reply."));
+    }
+    const reply = data as ActionReply;
+    const err = await sendNotifications(replyNotifications(reply, a, replies ?? [], viewer));
+    if (err) onError?.(err);
+    onReplied?.(reply);
+    if (markDone && !a.done) onToggle(a);
+    setDraft("");
+    setPosting(false);
+  }
+
   return (
     <li className="flex flex-wrap items-center gap-2 text-sm">
       <input type="checkbox" checked={a.done} onChange={() => onToggle(a)} className="h-4 w-4 accent-[var(--accent)]" title={a.done ? "Mark as not done" : "Mark as done"} />
       <span className={a.done ? "text-neutral-400 line-through" : "text-neutral-700"}>
-        {a.kind === "meeting" && "🤝 "}
+        {icon && `${icon} `}
         {a.kind === "meeting" && a.meeting_with ? <strong className="font-medium">Meeting with {a.meeting_with}: </strong> : null}
-        {a.description}
+        {isRequest && <strong className="font-medium">{kindLabel(a.kind)}{a.created_by ? ` from ${firstName(a.created_by)}` : ""}: </strong>}
+        <MentionText text={a.description} />
         {showOpportunity && <span className="text-neutral-400"> — {opportunity}</span>}
       </span>
-      {a.assignee && <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[11px] text-neutral-600">{canonicalLead(a.assignee)}</span>}
+      {a.assignee && (
+        <span style={tagColor(canonicalLead(a.assignee) ?? a.assignee)} className="rounded-full px-2 py-0.5 text-[11px] font-medium" title="Who it's for">
+          {a.assignee === EVERYONE ? "👥 Everyone" : canonicalLead(a.assignee)}
+        </span>
+      )}
       <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${DUE_STYLES[dueState(a)]}`}>{dueText(a)}</span>
       {a.kind === "meeting" && a.due_date && !a.done && (
         <button onClick={() => downloadIcs(a, opportunity)} className="text-xs font-medium text-[var(--accent)] hover:underline" title="Download a calendar invite — open it to add the meeting to Outlook with a reminder the day before">
           📅 Add to calendar
         </button>
       )}
+      {replies && (
+        <button onClick={() => setOpen(!open)} className="text-xs font-medium text-neutral-500 hover:text-[var(--accent)]" aria-expanded={open}>
+          💬 {replies.length ? `${replies.length} repl${replies.length > 1 ? "ies" : "y"}` : "Reply"}
+        </button>
+      )}
       {onRemove && <button onClick={() => onRemove(a)} className="text-xs text-neutral-300 hover:text-red-500" title="Delete">✕</button>}
+      {replies && open && (
+        <div className="ml-6 flex basis-full flex-col gap-2 border-l-2 border-neutral-200 pl-3">
+          {replies.map((r) => (
+            <div key={r.id} className="text-sm">
+              <p className="text-xs text-neutral-400">
+                <span className="font-semibold text-neutral-600">{r.author ? canonicalLead(r.author) : "Someone"}</span> · {fmtWhen(r.created_at)}
+              </p>
+              <p className="whitespace-pre-wrap text-neutral-700">
+                <MentionText text={r.body} />
+              </p>
+            </div>
+          ))}
+          {!viewer && <p className="text-xs text-amber-700">Pick your name in “Viewing as” so your reply shows who wrote it.</p>}
+          <MentionTextarea
+            value={draft}
+            onChange={setDraft}
+            minRows={1}
+            hint={false}
+            ariaLabel="Reply"
+            placeholder="Reply — say how you approached it, tag someone (e.g. Sammy)…"
+            onSubmit={() => postReply(false)}
+          />
+          <div className="flex flex-wrap justify-end gap-2">
+            <button onClick={() => postReply(false)} disabled={!draft.trim() || posting} className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40">
+              {posting ? "Sending…" : "Reply"}
+            </button>
+            {mine && !a.done && (
+              <button onClick={() => postReply(true)} disabled={!draft.trim() || posting} className="rounded-md border border-emerald-600 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-40">
+                Reply &amp; mark done ✓
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </li>
   );
 }
 
-function DraftActionRow({ draft, onChange, onRemove }: { draft: DraftAction; onChange: (d: DraftAction) => void; onRemove?: () => void }) {
+function DraftActionRow({ draft, viewer, onChange, onRemove }: { draft: DraftAction; viewer: string | null; onChange: (d: DraftAction) => void; onRemove?: () => void }) {
+  const kind = ACTION_KINDS.find((k) => k.value === draft.kind) ?? ACTION_KINDS[0];
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <select value={draft.kind} onChange={(e) => onChange({ ...draft, kind: e.target.value as DraftAction["kind"] })} className={`${baseInput} w-auto`}>
-        <option value="task">Task</option>
-        <option value="meeting">Meeting</option>
+    <div className="flex flex-wrap items-start gap-2">
+      <select value={draft.kind} onChange={(e) => onChange({ ...draft, kind: e.target.value as ActionKind })} className={`${baseInput} w-auto`} aria-label="Kind of action point">
+        {ACTION_KINDS.map((k) => (
+          <option key={k.value} value={k.value}>
+            {k.icon ? `${k.icon} ` : ""}
+            {k.label}
+          </option>
+        ))}
       </select>
       {draft.kind === "meeting" && (
         <input value={draft.meeting_with} onChange={(e) => onChange({ ...draft, meeting_with: e.target.value })} placeholder="With whom (name, organisation)" className={`${baseInput} w-56`} />
       )}
-      <input value={draft.description} onChange={(e) => onChange({ ...draft, description: e.target.value })} placeholder={draft.kind === "meeting" ? "Purpose of the meeting" : "What needs to be done"} className={`${baseInput} min-w-[200px] flex-1`} />
-      <select value={draft.assignee} onChange={(e) => onChange({ ...draft, assignee: e.target.value })} className={`${baseInput} w-auto`}>
+      <div className="min-w-[220px] flex-1">
+        <MentionTextarea
+          value={draft.description}
+          onChange={(v) => onChange(withAutoAssign({ ...draft, description: v }, viewer))}
+          minRows={1}
+          hint={false}
+          ariaLabel="Action point"
+          placeholder={kind.placeholder}
+        />
+      </div>
+      <select
+        value={draft.assignee}
+        onChange={(e) => onChange({ ...draft, assignee: e.target.value, autoAssign: false })}
+        className={`${baseInput} w-auto`}
+        aria-label="Who"
+        title={draft.autoAssign ? "Follows the name you tag — or pick someone" : undefined}
+      >
         <option value="">Who?</option>
         {LEADS.map((n) => <option key={n} value={n}>{n}</option>)}
+        <option value={EVERYONE}>👥 Everyone</option>
       </select>
       <input type="date" value={draft.due_date} onChange={(e) => onChange({ ...draft, due_date: e.target.value })} title={draft.kind === "meeting" ? "Meeting date" : "Due date"} className={`${baseInput} w-auto`} />
-      {onRemove && <button onClick={onRemove} className="text-neutral-300 hover:text-red-500" title="Remove">✕</button>}
+      {onRemove && <button onClick={onRemove} className="mt-1.5 text-neutral-300 hover:text-red-500" title="Remove">✕</button>}
     </div>
   );
 }

@@ -148,7 +148,7 @@ export function deskFor(
  * not tracked); with `discard` it is also hidden in the Scanner. Tracking it
  * again from the Scanner brings the removed item back with its notes.
  */
-export async function removeOpportunity(item: TrackerItem, by: string | null, reason: string | null, title: string, discard = false): Promise<string | null> {
+export async function removeOpportunity(item: Pick<TrackerItem, "id" | "owner" | "grant_id">, by: string | null, reason: string | null, title: string, discard = false): Promise<string | null> {
   const now = new Date().toISOString();
   const { error } = await supabase
     .from("tracker_items")
@@ -163,6 +163,16 @@ export async function removeOpportunity(item: TrackerItem, by: string | null, re
     if (gErr) return gErr.message;
   }
   return sendNotifications(removedNotification(item, by, title, reason));
+}
+
+/**
+ * Put a discarded opportunity back in the Grant Scanner. A removed tracker
+ * item stays in the "Removed" list (use restoreOpportunity to bring it back
+ * into the tracker as well).
+ */
+export async function sendBackToScanner(grantId: string): Promise<string | null> {
+  const { error } = await supabase.from("grants").update({ discarded: false, discarded_at: null }).eq("id", grantId);
+  return error ? error.message : null;
 }
 
 /** Bring a removed opportunity back (and un-discard it in the Grant Scanner). */

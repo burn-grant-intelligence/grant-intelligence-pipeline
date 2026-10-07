@@ -6,7 +6,7 @@ import { ActionItem, Grant, OpportunityNote, TRACKER_STATUSES, TrackerItem, Trac
 import OpportunityBreakdown from "@/components/OpportunityBreakdown";
 import TeamInbox from "@/components/TeamInbox";
 import { LEADS, canonicalLead, categoryLabel, fmtDate, statusLabel } from "@/lib/pipeline";
-import { isLive, removeOpportunity, restoreOpportunity } from "@/lib/collab";
+import { isLive, removeOpportunity, restoreOpportunity, sendBackToScanner } from "@/lib/collab";
 import { setViewer, useViewer } from "@/lib/viewer";
 import { KIND_BADGE, kindOf } from "@/lib/opportunityType";
 import { findSimilarTitle } from "@/lib/titleSimilarity";
@@ -153,6 +153,18 @@ export default function ApplicationTracker() {
     if (err) return setError(err);
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, removed_at: null, removed_by: null, removed_reason: null } : i)));
     setNotice(`Restored "${item.grant?.title ?? "the opportunity"}" — it is back in every tab.`);
+  }
+
+  // Discarded opportunities only: put it back in the Grant Scanner without
+  // bringing it back into the tracker.
+  async function sendBack(item: TrackerItem) {
+    if (!item.grant_id) return;
+    setBusyId(item.id);
+    const err = await sendBackToScanner(item.grant_id);
+    setBusyId(null);
+    if (err) return setError(err);
+    setItems((prev) => prev.map((i) => (i.id === item.id && i.grant ? { ...i, grant: { ...i.grant, discarded: false } as Grant } : i)));
+    setNotice(`"${item.grant?.title ?? "The opportunity"}" is back in the Grant Scanner, ready to track again.`);
   }
 
   const patchItem = (id: string, patch: Partial<TrackerItem>) =>
@@ -595,12 +607,23 @@ export default function ApplicationTracker() {
                     {item.removed_at ? ` on ${fmtDate(item.removed_at.slice(0, 10))}` : ""}
                     {item.removed_reason ? ` — ${item.removed_reason}` : ""}
                   </p>
+                  {(item.grant as (Grant & { discarded?: boolean }) | null | undefined)?.discarded && (
+                    <button
+                      onClick={() => sendBack(item)}
+                      disabled={busyId === item.id}
+                      title="Show it in the Grant Scanner again, without putting it back in the tracker"
+                      className="rounded-md border border-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:opacity-40"
+                    >
+                      ↩ Send back to Scanner
+                    </button>
+                  )}
                   <button
                     onClick={() => restore(item)}
                     disabled={busyId === item.id}
+                    title="Back into the tracker (and the Scanner)"
                     className="rounded-md border border-emerald-600 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-40"
                   >
-                    ↩ Restore
+                    ↩ Restore to tracker
                   </button>
                 </div>
               ) : (

@@ -56,6 +56,8 @@ export default function ApplicationTracker() {
   // "Remove & discard": the card being removed, and the reason typed.
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [removeReason, setRemoveReason] = useState("");
+  // Where a removed opportunity goes: back to the Grant Scanner (default) or discarded there too.
+  const [removeDiscard, setRemoveDiscard] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -113,22 +115,35 @@ export default function ApplicationTracker() {
     }, 150);
   }
 
-  // Remove & discard: hidden in every tab (Tracker, Eligibility, Draft
-  // Application, Management Dashboard) and discarded in the Grant Scanner.
-  // Nothing is deleted — "Removed" lists it with a Restore button.
+  // Remove from tracker: hidden in every tab (Tracker, Eligibility, Draft
+  // Application, Management Dashboard). The grant goes back to the Grant
+  // Scanner, or is discarded there too if chosen. Nothing is deleted —
+  // "Removed" lists it with a Restore button.
   async function confirmRemove(item: TrackerItem) {
     setBusyId(item.id);
     setNotice(null);
     const title = item.grant?.title ?? "this opportunity";
-    const err = await removeOpportunity(item, viewer, removeReason.trim() || null, title);
+    const discard = removeDiscard;
+    const err = await removeOpportunity(item, viewer, removeReason.trim() || null, title, discard);
     setBusyId(null);
     if (err && !/team_notifications/i.test(err)) return setError(err);
     const now = new Date().toISOString();
-    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, removed_at: now, removed_by: viewer, removed_reason: removeReason.trim() || null } : i)));
+    setItems((prev) =>
+      prev.map((i) =>
+        i.id === item.id
+          ? { ...i, removed_at: now, removed_by: viewer, removed_reason: removeReason.trim() || null, grant: i.grant ? ({ ...i.grant, discarded: discard } as Grant) : i.grant }
+          : i
+      )
+    );
     setRemovingId(null);
     setRemoveReason("");
+    setRemoveDiscard(false);
     if (expandedId === item.id) setExpandedId(null);
-    setNotice(`Removed "${title}" from every tab and discarded it in the Grant Scanner. Find it under “Removed” to restore it.`);
+    setNotice(
+      discard
+        ? `Removed "${title}" from every tab and discarded it in the Grant Scanner. Find it under “Removed” to restore it.`
+        : `Removed "${title}" from the tracker. It is back in the Grant Scanner, ready to track again — its notes are kept.`
+    );
   }
 
   async function restore(item: TrackerItem) {
@@ -575,7 +590,8 @@ export default function ApplicationTracker() {
               {removed ? (
                 <div className="flex items-center gap-3">
                   <p className="text-xs text-neutral-500">
-                    Removed{item.removed_by ? ` by ${canonicalLead(item.removed_by)}` : ""}
+                    {(item.grant as (Grant & { discarded?: boolean }) | null | undefined)?.discarded ? "Discarded" : "Sent back to the Grant Scanner"}
+                    {item.removed_by ? ` by ${canonicalLead(item.removed_by)}` : ""}
                     {item.removed_at ? ` on ${fmtDate(item.removed_at.slice(0, 10))}` : ""}
                     {item.removed_reason ? ` — ${item.removed_reason}` : ""}
                   </p>
@@ -623,9 +639,10 @@ export default function ApplicationTracker() {
                   onClick={() => {
                     setRemovingId(removingId === item.id ? null : item.id);
                     setRemoveReason("");
+                    setRemoveDiscard(false);
                   }}
-                  title="Remove & discard — takes it out of every tab (nothing is deleted; you can restore it)"
-                  aria-label="Remove and discard this opportunity"
+                  title="Remove from tracker — takes it out of every tab and sends it back to the Grant Scanner (nothing is deleted)"
+                  aria-label="Remove this opportunity from the tracker"
                   className="rounded-md border border-neutral-300 px-2.5 py-1.5 text-sm text-neutral-500 hover:border-red-300 hover:bg-red-50 hover:text-red-600"
                 >
                   🗑️
@@ -635,16 +652,30 @@ export default function ApplicationTracker() {
             </div>
             {removingId === item.id && !removed && (
               <div className="flex flex-col gap-2 rounded-md border border-red-200 bg-red-50 p-3">
-                <p className="text-sm font-medium text-red-800">Remove &amp; discard “{item.grant?.title ?? "this opportunity"}”?</p>
+                <p className="text-sm font-medium text-red-800">Remove “{item.grant?.title ?? "this opportunity"}” from the tracker?</p>
                 <p className="text-xs text-red-700">
-                  It leaves the Application Tracker, Eligibility Tracker, Draft Application and Management Dashboard, and the Grant Scanner hides it.
-                  Notes, drafts and action points are kept — restore it any time from “Removed”.
+                  It leaves the Application Tracker, Eligibility Tracker, Draft Application and Management Dashboard. Notes, drafts and action points are kept.
                   {canonicalLead(item.owner) && canonicalLead(item.owner) !== viewer ? ` ${canonicalLead(item.owner)} (the lead) will be told.` : ""}
                 </p>
+                <fieldset className="flex flex-col gap-1.5 text-sm text-neutral-800">
+                  <legend className="sr-only">Where should it go?</legend>
+                  <label className="flex items-start gap-2">
+                    <input type="radio" name={`remove-${item.id}`} checked={!removeDiscard} onChange={() => setRemoveDiscard(false)} className="mt-1" />
+                    <span>
+                      <strong>Send it back to the Grant Scanner</strong> — a good opportunity, just not one we&apos;re working on now. It shows there as untracked, and tracking it again brings its notes back.
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2">
+                    <input type="radio" name={`remove-${item.id}`} checked={removeDiscard} onChange={() => setRemoveDiscard(true)} className="mt-1" />
+                    <span>
+                      <strong>Discard it</strong> — also hide it in the Grant Scanner (not relevant, duplicate, expired).
+                    </span>
+                  </label>
+                </fieldset>
                 <input
                   value={removeReason}
                   onChange={(e) => setRemoveReason(e.target.value)}
-                  placeholder="Why? (optional) e.g. not eligible, deadline passed, duplicate"
+                  placeholder="Why? (optional) e.g. not working on it now, not eligible, duplicate"
                   className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm"
                   onKeyDown={(e) => e.key === "Enter" && confirmRemove(item)}
                   autoFocus
@@ -658,7 +689,7 @@ export default function ApplicationTracker() {
                     disabled={busyId === item.id}
                     className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-40"
                   >
-                    {busyId === item.id ? "Removing…" : "Remove & discard"}
+                    {busyId === item.id ? "Removing…" : removeDiscard ? "Remove & discard" : "Remove from tracker"}
                   </button>
                 </div>
               </div>

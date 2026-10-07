@@ -1,5 +1,5 @@
 // Team collaboration helpers: who gets notified, what shows in a person's
-// desk, and "Remove & discard" — shared by the Application Tracker and the
+// desk, and "Remove from tracker" — shared by the Application Tracker and the
 // Draft Application workspace.
 // Tables: supabase/team_collaboration_migration_2026-10-06.sql.
 
@@ -141,8 +141,14 @@ export function deskFor(
 
 // ── Remove & discard ──
 
-/** Hide an opportunity everywhere and discard it in the Grant Scanner. Nothing is deleted. */
-export async function removeOpportunity(item: TrackerItem, by: string | null, reason: string | null, title: string): Promise<string | null> {
+/**
+ * Take an opportunity out of the Application Tracker and every tab after it.
+ * Nothing is deleted. By default the grant goes back to the Grant Scanner as an
+ * ordinary, untracked opportunity (the Scanner already treats a removed item as
+ * not tracked); with `discard` it is also hidden in the Scanner. Tracking it
+ * again from the Scanner brings the removed item back with its notes.
+ */
+export async function removeOpportunity(item: TrackerItem, by: string | null, reason: string | null, title: string, discard = false): Promise<string | null> {
   const now = new Date().toISOString();
   const { error } = await supabase
     .from("tracker_items")
@@ -150,7 +156,10 @@ export async function removeOpportunity(item: TrackerItem, by: string | null, re
     .eq("id", item.id);
   if (error) return missingTable(error.message);
   if (item.grant_id) {
-    const { error: gErr } = await supabase.from("grants").update({ discarded: true, discarded_at: now }).eq("id", item.grant_id);
+    const { error: gErr } = await supabase
+      .from("grants")
+      .update(discard ? { discarded: true, discarded_at: now } : { discarded: false, discarded_at: null })
+      .eq("id", item.grant_id);
     if (gErr) return gErr.message;
   }
   return sendNotifications(removedNotification(item, by, title, reason));

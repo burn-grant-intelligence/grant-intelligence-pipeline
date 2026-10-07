@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { removeOpportunity } from "@/lib/collab";
+import { useViewer } from "@/lib/viewer";
 import { FOCUS_AREAS, Grant } from "@/lib/types";
 import { AWARD_TAG, KIND_BADGE, isAward, kindOf, normalizeTag } from "@/lib/opportunityType";
 import { compareTitles } from "@/lib/titleSimilarity";
@@ -50,9 +52,11 @@ const SECTION_LABEL = Object.fromEntries(SECTIONS.map((s) => [s.key, `${s.icon} 
 const SEARCH_LIMIT = 60; // extra rows fetched from the database per search
 
 // Who is already tracking an opportunity (one tracker item per opportunity).
-type TrackedInfo = { owner: string | null; status: string };
+type TrackedInfo = { id: string; owner: string | null; status: string };
 
 export default function GrantScanner() {
+  const viewer = useViewer();
+  const [untrackingId, setUntrackingId] = useState<string | null>(null);
   const [grants, setGrants] = useState<Grant[]>([]);
   const [sourceCount, setSourceCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -67,6 +71,12 @@ export default function GrantScanner() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [discardingId, setDiscardingId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<SectionKey>>(new Set());
+  // "Discarded" view: everything discarded here (× on a card) or by removing an
+  // opportunity from the Application Tracker with "Discard it". Nothing is
+  // deleted, so each can be restored to the Scanner.
+  const [showDiscarded, setShowDiscarded] = useState(false);
+  const [discardedRange, setDiscardedRange] = useState<"2d" | "7d" | "all">("2d");
+  const [restoringIds, setRestoringIds] = useState<Set<string>>(new Set());
 
   // Search: matches what is loaded straight away, and also asks the database
   // (debounced) so opportunities beyond the first 200 are found too.
@@ -122,7 +132,7 @@ export default function GrantScanner() {
       // Tracked state comes from the database, so everyone sees "Tracked ✓"
       // on an opportunity someone else already tracked.
       // A removed opportunity ("Remove & discard") no longer counts as tracked.
-      setTracked(new Map(((trackedRes.data ?? []) as { grant_id: string | null; owner: string | null; status: string; removed_at?: string | null }[]).filter((t) => t.grant_id && !t.removed_at).map((t) => [t.grant_id as string, { owner: t.owner, status: t.status }])));
+      setTracked(new Map(((trackedRes.data ?? []) as { id: string; grant_id: string | null; owner: string | null; status: string; removed_at?: string | null }[]).filter((t) => t.grant_id && !t.removed_at).map((t) => [t.grant_id as string, { id: t.id, owner: t.owner, status: t.status }])));
       setSourceCount(count ?? 0);
       setGrants(data ?? []);
     } catch (err) {
@@ -249,6 +259,41 @@ export default function GrantScanner() {
       .map((e) => e.grant);
   }, [grants, searchExtra, words, searchActive]);
 
+  // Discarded opportunities, newest first. The search box narrows them too.
+  const discardedAt = (g: Grant) => (g as Grant & { discarded_at?: string | null }).discarded_at ?? null;
+  const discardedAll = useMemo(
+    () =>
+      grants
+        .filter((g) => isDiscarded(g) && matchesSearch(g, words))
+        .sort((a, b) => (discardedAt(b) ?? "").localeCompare(discardedAt(a) ?? "")),
+    [grants, words]
+  );
+  const discardedShown = useMemo(() => {
+    if (discardedRange === "all") return discardedAll;
+    const cutoff = Date.now() - (discardedRange === "2d" ? 2 : 7) * 86_400_000;
+    // Older rows have no discard date: they only show under "All".
+    return discardedAll.filter((g) => {
+      const at = discardedAt(g);
+      return at && new Date(at).getTime() >= cutoff;
+    });
+  }, [discardedAll, discardedRange]);
+
+  async function restoreGrants(list: Grant[]) {
+    if (!list.length) return;
+    const ids = list.map((g) => g.id);
+    setError(null);
+    setRestoringIds((prev) => new Set([...prev, ...ids]));
+    const { error: restoreError } = await supabase.from("grants").update({ discarded: false, discarded_at: null }).in("id", ids);
+    setRestoringIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+    if (restoreError) return setError(restoreError.message);
+    const back = new Set(ids);
+    setGrants((prev) => prev.map((g) => (back.has(g.id) ? ({ ...g, discarded: false, discarded_at: null } as Grant) : g)));
+  }
+
   // The filtered list split into sections, in priority order.
   const sections = useMemo(() => {
     const groups = new Map<SectionKey, Grant[]>(SECTIONS.map((s) => [s.key, []]));
@@ -286,7 +331,7 @@ export default function GrantScanner() {
           return;
         }
       }
-      setTracked((prev) => new Map(prev).set(grant.id, { owner: row.owner, status: row.status }));
+      setTracked((prev) => new Map(prev).set(grant.id, { id: row.id, owner: row.owner, status: row.status }));
       setTrackingId(null);
       return;
     }
@@ -295,11 +340,47 @@ export default function GrantScanner() {
       status: "tracking",
     });
     if (!insertError || insertError.code === "23505") {
-      setTracked((prev) => new Map(prev).set(grant.id, { owner: null, status: "tracking" }));
+      // Read the row back: its id is needed to untrack it later.
+      const { data: row } = await supabase.from("tracker_items").select("*").eq("grant_id", grant.id).limit(1);
+      const r = (row?.[0] ?? null) as { id: string; owner: string | null; status: string } | null;
+      if (r) setTracked((prev) => new Map(prev).set(grant.id, { id: r.id, owner: r.owner, status: r.status }));
     } else {
       setError(insertError.message);
     }
     setTrackingId(null);
+  }
+
+  // Untrack: takes it out of the Application Tracker, Eligibility and Draft
+  // tabs and leaves it here in the Scanner. Nothing is deleted — its notes,
+  // action points and lead are kept, and tracking it again brings them back.
+  async function untrackGrant(grant: Grant) {
+    const info = tracked.get(grant.id);
+    if (!info) return;
+    setError(null);
+    let kept = "";
+    try {
+      const [n, a] = await Promise.all([
+        supabase.from("opportunity_notes").select("id", { count: "exact", head: true }).eq("tracker_item_id", info.id),
+        supabase.from("action_items").select("id", { count: "exact", head: true }).eq("tracker_item_id", info.id).eq("done", false),
+      ]);
+      const parts = [
+        n.count ? `${n.count} meeting note${n.count > 1 ? "s" : ""}` : "",
+        a.count ? `${a.count} open action point${a.count > 1 ? "s" : ""}` : "",
+      ].filter(Boolean);
+      if (parts.length) kept = ` Its ${parts.join(" and ")} stay saved — tracking it again brings them back.`;
+    } catch {
+      // The counts are only for the question below.
+    }
+    if (!window.confirm(`Untrack "${grant.title}"?\n\nIt leaves the Application Tracker, Eligibility and Draft tabs and stays here in the Grant Scanner.${kept}`)) return;
+    setUntrackingId(grant.id);
+    const err = await removeOpportunity({ id: info.id, owner: info.owner, grant_id: grant.id }, viewer, "Untracked from the Grant Scanner", grant.title ?? "this opportunity", false);
+    setUntrackingId(null);
+    if (err && !/team_notifications/i.test(err)) return setError(err);
+    setTracked((prev) => {
+      const next = new Map(prev);
+      next.delete(grant.id);
+      return next;
+    });
   }
 
   async function discardGrant(grant: Grant) {
@@ -495,6 +576,20 @@ export default function GrantScanner() {
               ) : (
                 <span />
               )}
+              <div className="flex items-center gap-2">
+              {tracked.has(grant.id) && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    untrackGrant(grant);
+                  }}
+                  disabled={untrackingId === grant.id}
+                  title="Take it out of the Application Tracker — it stays here in the Scanner"
+                  className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-600 hover:bg-neutral-50 disabled:opacity-40"
+                >
+                  {untrackingId === grant.id ? "Untracking…" : "Untrack"}
+                </button>
+              )}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -510,6 +605,7 @@ export default function GrantScanner() {
                     ? "Tracking…"
                     : award ? "+ Track this award" : "+ Track this grant"}
               </button>
+              </div>
             </div>
           </div>
         )}
@@ -637,8 +733,20 @@ export default function GrantScanner() {
           out against it. White + medium weight + a soft shadow keeps it
           legible over both the bright and dark parts of the image. */}
       <div className="flex items-center justify-between text-sm font-medium text-white [text-shadow:0_1px_3px_rgb(0_0_0/0.45)]">
-        <span>
-          {sourceCount === null ? "…" : sourceCount} active source{sourceCount === 1 ? "" : "s"}
+        <span className="flex flex-wrap items-center gap-3">
+          <span>
+            {sourceCount === null ? "…" : sourceCount} active source{sourceCount === 1 ? "" : "s"}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowDiscarded((v) => !v)}
+            aria-pressed={showDiscarded}
+            className={`rounded-full border px-3 py-1 text-xs font-semibold [text-shadow:none] ${
+              showDiscarded ? "border-white bg-white text-[var(--ink)]" : "border-white/70 bg-black/20 text-white hover:bg-black/30"
+            }`}
+          >
+            🗑️ Discarded ({grants.filter(isDiscarded).length})
+          </button>
         </span>
         <span>
           {loading
@@ -666,7 +774,72 @@ export default function GrantScanner() {
         </div>
       )}
 
-      {searchActive ? (
+      {showDiscarded ? (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-5 py-3">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="font-semibold text-[var(--ink)]">Discarded</span>
+              {([["2d", "Last 2 days"], ["7d", "Last 7 days"], ["all", "All"]] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setDiscardedRange(key)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium ${discardedRange === key ? "bg-[var(--accent)] text-white" : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"}`}
+                >
+                  {label}
+                </button>
+              ))}
+              <span className="text-xs text-[var(--ink-muted)]">
+                {discardedShown.length} shown{searchActive ? ` for “${search.trim()}”` : ""}
+              </span>
+            </div>
+            <button
+              onClick={() => {
+                if (window.confirm(`Restore ${discardedShown.length} opportunit${discardedShown.length === 1 ? "y" : "ies"} to the Grant Scanner?`)) restoreGrants(discardedShown);
+              }}
+              disabled={discardedShown.length === 0 || discardedShown.some((g) => restoringIds.has(g.id))}
+              className="rounded-md border border-emerald-600 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-40"
+            >
+              ↩ Restore all shown ({discardedShown.length})
+            </button>
+          </div>
+          {discardedShown.length === 0 && (
+            <div className="rounded-lg border border-dashed border-neutral-300 bg-[var(--surface)] p-8 text-center text-sm text-[var(--ink-muted)]">
+              {discardedAll.length > 0 ? "Nothing discarded in this period. Choose “All” to see older ones." : searchActive ? "No discarded opportunity matches your search." : "Nothing has been discarded."}
+            </div>
+          )}
+          {discardedShown.map((g) => {
+            const at = discardedAt(g);
+            return (
+              <article key={g.id} className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-semibold text-[var(--ink)]">{g.title}</h3>
+                  <p className="mt-0.5 text-xs text-[var(--ink-muted)]">
+                    {[g.funder, g.deadline ? `Deadline ${g.deadline}` : null, g.amount ? `${g.currency ?? "USD"} ${g.amount.toLocaleString("en-US")}` : null].filter(Boolean).join(" · ")}
+                  </p>
+                  <p className="mt-1 text-[11px] text-neutral-400">
+                    {at ? `Discarded ${new Date(at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}` : "Discarded (date not recorded)"}
+                    {isExpired(g) ? " · deadline has passed" : ""}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {(g.application_url || g.rfp_url) && (
+                    <a href={(g.rfp_url || g.application_url) as string} target="_blank" rel="noopener noreferrer" className="text-xs text-[var(--accent)] underline">
+                      Call page ↗
+                    </a>
+                  )}
+                  <button
+                    onClick={() => restoreGrants([g])}
+                    disabled={restoringIds.has(g.id)}
+                    className="rounded-md border border-emerald-600 px-3 py-1.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-40"
+                  >
+                    {restoringIds.has(g.id) ? "Restoring…" : "↩ Restore"}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : searchActive ? (
         <div className="flex flex-col gap-4">
           {searchResults.length === 0 && !searching && (
             <div className="rounded-lg border border-dashed border-neutral-300 bg-[var(--surface)] p-8 text-center text-[var(--ink-muted)]">

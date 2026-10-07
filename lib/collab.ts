@@ -17,7 +17,7 @@ export const ACTION_KINDS: { value: ActionKind; label: string; icon: string; pla
 export const kindIcon = (k: ActionKind | string) => ACTION_KINDS.find((x) => x.value === k)?.icon ?? "";
 export const kindLabel = (k: ActionKind | string) => ACTION_KINDS.find((x) => x.value === k)?.label ?? "Task";
 
-/** Not removed with "Remove & discard". */
+/** Not removed with "Delete". */
 export const isLive = (item: Pick<TrackerItem, "removed_at"> | null | undefined) => !!item && !item.removed_at;
 
 export type NotificationDraft = Pick<TeamNotification, "recipient" | "kind" | "tracker_item_id" | "note_id" | "action_id" | "reply_id" | "from_person" | "excerpt">;

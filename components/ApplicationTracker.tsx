@@ -352,7 +352,9 @@ export default function ApplicationTracker() {
     const { error: trackerError } = await supabase.from("tracker_items").insert({
       grant_id: grantId,
       status: "tracking",
-      notes: manualNotes.trim() || null,
+      // What the user types here is the opportunity's description (the
+      // Description box in its Breakdown), not a tracker note.
+      pipeline_description: manualNotes.trim() || null,
     });
     if (trackerError) {
       setError(trackerError.code === "23505" ? "Already tracked — each opportunity is tracked once. Refresh to see it." : trackerError.message);
@@ -507,8 +509,9 @@ export default function ApplicationTracker() {
             <textarea
               value={manualNotes}
               onChange={(e) => setManualNotes(e.target.value)}
-              placeholder="Notes"
-              rows={2}
+              placeholder="Description (what it funds, who can apply, key dates). It is saved in the opportunity's Breakdown."
+              aria-label="Description"
+              rows={3}
               className="rounded-md border border-neutral-300 px-3 py-2 text-sm sm:col-span-2"
             />
           </div>
@@ -583,7 +586,6 @@ export default function ApplicationTracker() {
                   {KIND_BADGE[kindOf(item.grant)].label}
                 </span>
                 {details && <p className="text-sm text-neutral-500">{details}</p>}
-                {item.notes && <p className="mt-1 text-sm italic text-neutral-500">{item.notes}</p>}
                 {(chips.length > 0 || openCount > 0) && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {chips.map((c) => (

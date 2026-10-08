@@ -1,24 +1,25 @@
 "use client";
 
 // The workspace for one application in the Draft Application tab. Opens over
-// the board and shows only the stage the application is at (Concept, or First
-// draft once it moves on):
+// the board for the stage the application is at (Concept, or First draft once
+// it moves on):
 //
-//   ✨ Claude          — the stage's Claude chat: start it once, paste its link,
-//                       and everyone opens the same chat (components/StageClaude.tsx).
-//   Meetings & actions — meeting notes and action points with tagging, review
-//                       and input requests (same as the Application Tracker).
-//   Donor guidance     — what the donor (and management) want, with date and
-//                       source. Goes into the Claude prompt.
-//   History            — everything on this opportunity in one timeline: notes
-//                       and action points from the Application Tracker, the
-//                       eligibility check and reviews, replies, stage moves,
-//                       Claude links and guidance.
+//   ✨ Claude              — the stage's Claude chat: start it once, paste its link,
+//                           and everyone opens the same chat (components/StageClaude.tsx).
+//   Meeting notes          — meeting notes and action points with tagging, review
+//                           and input requests (same as the Application Tracker).
+//   Management guidance    — steer from management (role, countries, products,
+//                           budget, red lines). Goes into the Claude prompt.
+//   Donor guidance         — what the donor wants beyond the call text. Goes into the prompt.
+//   Notes                  — the team's free notes for this stage. Go into the prompt.
+//   History                — everything on this opportunity in one timeline.
+// Moving an application between Concept, First draft and Submitted is done by
+// dragging its card on the board.
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { canonicalLead, effectiveFields, fmtDate, todayIso } from "@/lib/pipeline";
-import { BOARD_COLUMNS, MIGRATION_HINT, columnOf, daysLeftLabel, isMissingDraftTables, stageMeta, stageOf, type BoardColumn } from "@/lib/drafting";
+import { MIGRATION_HINT, columnOf, daysLeftLabel, donorGuidance, isMissingDraftTables, managementGuidance, stageMeta, stageOf } from "@/lib/drafting";
 import { kindIcon } from "@/lib/collab";
 import { ELIGIBILITY_CHECK, decisionOf, isReviewAction } from "@/lib/eligibilityReview";
 import type { ActionItem, DraftGuidance, DraftStage, DraftStageMove, DraftStageWork, OpportunityNote, TrackerItem } from "@/lib/types";
@@ -27,10 +28,12 @@ import { MentionText } from "@/components/Mentions";
 import { PersonChip } from "@/components/EligibilityReview";
 import StageClaude from "@/components/StageClaude";
 
-type Tab = "meetings" | "guidance" | "history";
+type Tab = "meetings" | "management" | "donor" | "notes" | "history";
 const TABS: { key: Tab; label: string }[] = [
-  { key: "meetings", label: "🤝 Meetings & actions" },
-  { key: "guidance", label: "🧭 Donor guidance" },
+  { key: "meetings", label: "🤝 Meeting notes" },
+  { key: "management", label: "🧭 Management guidance" },
+  { key: "donor", label: "🎯 Donor guidance" },
+  { key: "notes", label: "📝 Notes" },
   { key: "history", label: "🕘 History" },
 ];
 
@@ -49,7 +52,6 @@ export default function DraftWorkspace({
   prompt,
   onClose,
   onWorkSaved,
-  onRequestMove,
   onGuidanceChange,
   onNotesChange,
   onActionsChange,
@@ -65,7 +67,6 @@ export default function DraftWorkspace({
   prompt: () => string;
   onClose: () => void;
   onWorkSaved: (row: DraftStageWork) => void;
-  onRequestMove: (to: BoardColumn) => void;
   onGuidanceChange: (update: (prev: DraftGuidance[]) => DraftGuidance[]) => void;
   onNotesChange: (update: (prev: OpportunityNote[]) => OpportunityNote[]) => void;
   onActionsChange: (update: (prev: ActionItem[]) => ActionItem[]) => void;
@@ -76,11 +77,9 @@ export default function DraftWorkspace({
   const [tab, setTab] = useState<Tab>("meetings");
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<DraftStageMove[]>([]);
-  const [showMindset, setShowMindset] = useState(false);
   const [replies] = useReplies([item.id]);
   const eff = effectiveFields(item);
   const opportunity = eff.programName || "(untitled opportunity)";
-  const meta = stageMeta(stage);
   const work = works.find((w) => w.stage === stage) ?? null;
 
   useEffect(() => {
@@ -130,33 +129,8 @@ export default function DraftWorkspace({
           </button>
         </div>
 
-        {/* ── the stage it is at, and its Claude chat ── */}
-        <div className="flex flex-col gap-3 rounded-xl border border-orange-200 bg-orange-50/50 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 max-w-2xl">
-              <p className="text-base font-semibold text-[var(--ink)]">
-                {submitted ? "📨 Submitted" : `${meta.icon} ${meta.label}`}
-              </p>
-              <p className="mt-0.5 text-sm text-neutral-700">
-                {submitted ? `Sent to the funder${item.submission_date ? ` on ${fmtDate(item.submission_date)}` : ""}.` : meta.goal}{" "}
-                {!submitted && (
-                  <button onClick={() => setShowMindset(!showMindset)} className="text-xs font-medium text-[var(--accent)] hover:underline">
-                    {showMindset ? "Hide tips" : "Tips"}
-                  </button>
-                )}
-              </p>
-              {showMindset && (
-                <ul className="mt-2 flex flex-col gap-0.5 text-sm text-neutral-600">
-                  {meta.mindset.map((m) => (
-                    <li key={m}>• {m}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <MoveToggle column={column} onMove={onRequestMove} />
-          </div>
-          <StageClaude item={item} stage={stage} work={work} viewer={viewer} prompt={prompt} onSaved={onWorkSaved} readOnly={submitted} />
-        </div>
+        {/* ── the stage's Claude chat ── */}
+        <StageClaude item={item} stage={stage} work={work} viewer={viewer} prompt={prompt} onSaved={onWorkSaved} readOnly={submitted} />
 
         {tablesMissing && <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{MIGRATION_HINT}</div>}
         {error && <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
@@ -172,7 +146,9 @@ export default function DraftWorkspace({
               className={`-mb-px rounded-t-md border-b-2 px-3 py-2 text-sm ${tab === t.key ? "border-[var(--accent)] font-semibold text-[var(--ink)]" : "border-transparent text-neutral-500 hover:text-neutral-800"}`}
             >
               {t.label}
-              {t.key === "guidance" && guidance.length > 0 && <span className="ml-1 text-xs text-neutral-400">({guidance.length})</span>}
+              {t.key === "management" && managementGuidance(guidance).length > 0 && <span className="ml-1 text-xs text-neutral-400">({managementGuidance(guidance).length})</span>}
+              {t.key === "donor" && donorGuidance(guidance).length > 0 && <span className="ml-1 text-xs text-neutral-400">({donorGuidance(guidance).length})</span>}
+              {t.key === "notes" && work?.stage_notes?.trim() && <span className="ml-1 text-xs text-neutral-400">•</span>}
             </button>
           ))}
         </div>
@@ -190,51 +166,46 @@ export default function DraftWorkspace({
             stage={stage}
           />
         )}
-        {tab === "guidance" && <GuidanceTab item={item} guidance={guidance} viewer={viewer} onChange={onGuidanceChange} onError={setError} />}
+        {tab === "management" && <GuidanceTab kind="management" item={item} guidance={managementGuidance(guidance)} viewer={viewer} onChange={onGuidanceChange} onError={setError} />}
+        {tab === "donor" && <GuidanceTab kind="donor" item={item} guidance={donorGuidance(guidance)} viewer={viewer} onChange={onGuidanceChange} onError={setError} />}
+        {tab === "notes" && <StageNotes item={item} stage={stage} work={work} onSaved={onWorkSaved} onError={setError} readOnly={false} />}
         {tab === "history" && <HistoryTab item={item} notes={notes} actions={actions} replies={replies} moves={history} works={works} guidance={guidance} />}
       </div>
     </div>
   );
 }
 
-// The toggle on every card and in the workspace: Concept | First draft |
-// Submitted. Clicking the column it is already in does nothing.
-export function MoveToggle({ column, onMove, disabled, compact }: { column: BoardColumn; onMove: (to: BoardColumn) => void; disabled?: boolean; compact?: boolean }) {
-  return (
-    <div role="group" aria-label="Move to" className="inline-flex w-full overflow-hidden rounded-md border border-neutral-300 sm:w-auto">
-      {BOARD_COLUMNS.map((c, i) => {
-        const active = c.key === column;
-        return (
-          <button
-            key={c.key}
-            type="button"
-            aria-pressed={active}
-            disabled={disabled}
-            onClick={() => !active && onMove(c.key)}
-            title={active ? `Currently in ${c.label}` : `Move to ${c.label}`}
-            className={`flex-1 whitespace-nowrap ${i > 0 ? "border-l border-neutral-300" : ""} ${compact ? "px-2 py-1 text-[11px]" : "px-3 py-1.5 text-xs"} font-medium transition disabled:opacity-50 ${
-              active ? (c.key === "submitted" ? "bg-emerald-600 text-white" : "bg-[var(--accent)] text-white") : "bg-white text-neutral-600 hover:bg-neutral-50"
-            }`}
-          >
-            {c.icon} {c.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
+// ───────────────────────── Management and donor guidance ─────────────────────────
+// One table, told apart by `source`: "Management…" is management's steer, the rest is the donor's.
 
-// ───────────────────────── Donor guidance ─────────────────────────
-
-const GUIDANCE_SOURCES = ["Donor call / RFP", "Donor meeting", "Donor email", "Management", "Other"];
+const GUIDANCE_KINDS = {
+  management: {
+    sources: ["Management meeting", "Management email", "Management"],
+    title: "Add management guidance",
+    help: "What management wants before and during the writing: our role (lead or partner), countries, products, budget ceiling and red lines. It goes into the Claude prompt.",
+    who: "Who said it (e.g. CEO)",
+    placeholder: "e.g. Lead with Kenya and Tanzania only. Keep the budget under USD 250k and partner with county governments. Do not promise carbon credits.",
+    list: "Management guidance",
+  },
+  donor: {
+    sources: ["Donor call / RFP", "Donor meeting", "Donor email", "Other"],
+    title: "Add donor guidance",
+    help: "What the donor wants beyond the call text: priorities, what they score, red lines, word limits. It goes into the Claude prompt.",
+    who: "Who said it (e.g. programme officer)",
+    placeholder: "e.g. The donor wants women-led distribution and verified usage data. Maximum 2 pages. No carbon revenue in the budget.",
+    list: "Donor guidance",
+  },
+} as const;
 
 function GuidanceTab({
+  kind,
   item,
   guidance,
   viewer,
   onChange,
   onError,
 }: {
+  kind: "management" | "donor";
   item: TrackerItem;
   guidance: DraftGuidance[];
   viewer: string | null;
@@ -242,7 +213,8 @@ function GuidanceTab({
   onError: (m: string | null) => void;
 }) {
   const [date, setDate] = useState(todayIso());
-  const [source, setSource] = useState(GUIDANCE_SOURCES[0]);
+  const cfg = GUIDANCE_KINDS[kind];
+  const [source, setSource] = useState<string>(cfg.sources[0]);
   const [givenBy, setGivenBy] = useState("");
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
@@ -275,36 +247,34 @@ function GuidanceTab({
   return (
     <div className="grid gap-5 lg:grid-cols-2">
       <section className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-3">
-        <p className="text-sm font-medium text-neutral-800">Add guidance</p>
-        <p className="text-xs text-neutral-500">
-          What the donor wants (priorities, what they score, red lines, word limits) and any steer from management. It goes into the Claude prompt.
-        </p>
+        <p className="text-sm font-medium text-neutral-800">{cfg.title}</p>
+        <p className="text-xs text-neutral-500">{cfg.help}</p>
         <div className="flex flex-wrap items-center gap-2">
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={`${baseInput} w-40`} aria-label="Date" />
           <select value={source} onChange={(e) => setSource(e.target.value)} className={`${baseInput} w-auto`} aria-label="Where it came from">
-            {GUIDANCE_SOURCES.map((o) => (
+            {cfg.sources.map((o) => (
               <option key={o}>{o}</option>
             ))}
           </select>
-          <input value={givenBy} onChange={(e) => setGivenBy(e.target.value)} placeholder="Who said it (e.g. programme officer)" className={`${baseInput} w-56`} />
+          <input value={givenBy} onChange={(e) => setGivenBy(e.target.value)} placeholder={cfg.who} className={`${baseInput} w-56`} />
         </div>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={4}
-          aria-label="Guidance"
-          placeholder="e.g. The donor wants women-led distribution and verified usage data; max 2 pages; no carbon revenue in the budget."
+          aria-label={cfg.list}
+          placeholder={cfg.placeholder}
           className={inputCls}
         />
         <div className="flex justify-end">
           <button onClick={add} disabled={!text.trim() || saving} className={primaryBtn}>
-            {saving ? "Saving…" : "Save guidance"}
+            {saving ? "Saving…" : `Save ${kind} guidance`}
           </button>
         </div>
       </section>
 
       <section className="flex flex-col gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-neutral-400">Guidance ({guidance.length})</p>
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-neutral-400">{cfg.list} ({guidance.length})</p>
         {sorted.length === 0 && <p className="rounded-lg border border-dashed border-neutral-300 p-4 text-sm text-neutral-500">Nothing yet.</p>}
         {sorted.map((g) => (
           <div key={g.id} className="rounded-lg border border-neutral-200 p-2.5 text-sm">
@@ -325,6 +295,69 @@ function GuidanceTab({
         ))}
       </section>
     </div>
+  );
+}
+
+// ───────────────────────── Notes (go into the prompt) ─────────────────────────
+
+function StageNotes({
+  item,
+  stage,
+  work,
+  onSaved,
+  onError,
+  readOnly,
+}: {
+  item: TrackerItem;
+  stage: DraftStage;
+  work: DraftStageWork | null;
+  onSaved: (row: DraftStageWork) => void;
+  onError: (m: string | null) => void;
+  readOnly: boolean;
+}) {
+  const saved = work?.stage_notes ?? "";
+  const [text, setText] = useState(saved);
+  const [saving, setSaving] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
+  const dirty = text !== saved;
+
+  async function save() {
+    setSaving(true);
+    onError(null);
+    const { data, error } = await supabase
+      .from("draft_stage_work")
+      .upsert({ tracker_item_id: item.id, stage, stage_notes: text.trim() || null, updated_by: null, updated_at: new Date().toISOString() }, { onConflict: "tracker_item_id,stage" })
+      .select()
+      .single();
+    setSaving(false);
+    if (error) return onError(isMissingDraftTables(error.message) ? MIGRATION_HINT : error.message);
+    onSaved(data as DraftStageWork);
+    setJustSaved(true);
+    window.setTimeout(() => setJustSaved(false), 2500);
+  }
+
+  return (
+    <section className="flex flex-col gap-2 rounded-lg border border-neutral-200 p-3">
+      <p className="text-sm font-medium text-neutral-800">Notes for this stage</p>
+      <p className="text-xs text-neutral-500">
+        Anything else Claude should know while writing: a point to stress, a figure to use, a story to tell, something to avoid. These notes go into the Claude prompt.
+      </p>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={8}
+        aria-label="Notes for this stage"
+        disabled={readOnly}
+        placeholder="e.g. Open with the founding story. Stress the women-led distribution pilot in Kisumu. Use the 2025 impact figures, not the 2024 ones."
+        className={inputCls}
+      />
+      <div className="flex items-center justify-end gap-3">
+        {justSaved && <span className="text-xs text-emerald-600">Saved ✓</span>}
+        <button onClick={save} disabled={!dirty || saving || readOnly} className={primaryBtn}>
+          {saving ? "Saving…" : "Save notes"}
+        </button>
+      </div>
+    </section>
   );
 }
 

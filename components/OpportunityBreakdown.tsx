@@ -349,7 +349,7 @@ export default function OpportunityBreakdown({
         </div>
 
         <Field label="Description">
-          <textarea key={k("description")} rows={4} defaultValue={item.pipeline_description ?? ""} placeholder={grant?.description ?? "What the opportunity funds, who can apply, size and timeline…"} onBlur={(e) => saveText("pipeline_description", e.target.value)} className={inputCls} />
+          <textarea key={k("description")} rows={4} defaultValue={item.pipeline_description ?? item.notes ?? ""} placeholder={grant?.description ?? "What the opportunity funds, who can apply, size and timeline…"} onBlur={(e) => saveText("pipeline_description", e.target.value)} className={inputCls} />
         </Field>
 
         <Field label="Product type" hint="Select one or more.">

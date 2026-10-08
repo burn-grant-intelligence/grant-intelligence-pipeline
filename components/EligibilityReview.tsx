@@ -18,6 +18,7 @@ import {
   ELIGIBILITY_CHECK,
   REVIEW_ORIGIN,
   decisionOf,
+  finalResult,
   fromLabel,
   needsReview,
   outcomeBody,
@@ -139,9 +140,12 @@ export default function EligibilityReview({
 
     if (decision) {
       const now = new Date().toISOString();
+      // The "Why" box on the card carries the reviewer's call, not the automatic text.
+      const reviewNotes = finalResult({ ...item, fit_status: decision, fit_source: "manual" }, [{ author: me, body, created_at: now }]);
+      const reviewText = reviewNotes ? [reviewNotes.statement, reviewNotes.notes].filter(Boolean).join(" ") : null;
       const [a, t] = await Promise.all([
         supabase.from("action_items").update({ done: true, done_at: now }).eq("id", open.id),
-        supabase.from("tracker_items").update({ fit_status: decision, fit_source: "manual", updated_at: now }).eq("id", item.id),
+        supabase.from("tracker_items").update({ fit_status: decision, fit_source: "manual", fit_notes: reviewText, updated_at: now }).eq("id", item.id),
       ]);
       const err = a.error ?? t.error;
       if (err) {
@@ -149,7 +153,7 @@ export default function EligibilityReview({
         return onError(err.message);
       }
       onActionsChange((prev) => prev.map((x) => (x.id === open.id ? { ...x, done: true, done_at: now } : x)));
-      onItemPatch({ fit_status: decision, fit_source: "manual" });
+      onItemPatch({ fit_status: decision, fit_source: "manual", fit_notes: reviewText });
     }
     if (nErr) onError(nErr);
     setNotes("");

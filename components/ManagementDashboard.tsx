@@ -5,13 +5,24 @@ import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabaseClient";
 import { FitStatus, KeyPriority, TrackerItem, TrackerStatus } from "@/lib/types";
 import OpportunityPipeline from "@/components/OpportunityPipeline";
+import GrantWritingDeck from "@/components/GrantWritingDeck";
+import TaskManager from "@/components/TaskManager";
+import { SlidePopup, useSlideRows } from "@/components/Slides";
 import { FUNDING_TYPES, LEADS, canonicalLead } from "@/lib/pipeline";
+import { matchPriority, slideFor, type SlideTarget } from "@/lib/slides";
+import { useViewer } from "@/lib/viewer";
 
 // Quick-access buttons.
 const QUICK_LINKS = {
   weeklyPpt: "https://burn.sharepoint.com/sites/BurnMFG_Main_Site2/3GA_General_and_Admin/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FBurnMFG%5FMain%5FSite2%2F3GA%5FGeneral%5Fand%5FAdmin%2FShared%20Documents%2F31GA%5FCEO%5FOffice%2F31GA%2D06%5FGrants%2F4%2E%20General%2FWeekly%20updates&viewid=3e624444%2D0dee%2D4e13%2Da3a4%2D3d1b4a7ff876&d=w0143488dc9a54b0b96b79d993d48667f&csf=1&ovuser=5b303516%2Df2b1%2D4ff6%2D96ad%2D5945b63736b1%2Cbornventure%2Ekinoti%40burnmfg%2Ecom&TeamsCID=9abe4188%2D532f%2D4563%2Da85d%2De2d8da2c4203&OR=Teams%2DHL&CT=1788960285534&clickparams=eyJBcHBOYW1lIjoiVGVhbXMtV2ViIiwiQXBwVmVyc2lvbiI6IjE0MTUvMjYwODEzMTkzMTciLCJIYXNGZWRlcmF0ZWRVc2VyIjpmYWxzZX0%3D&CID=478839a2%2D90d4%2Dc000%2D4afb%2Db9980a4da99a&cidOR=SPO&FolderCTID=0x012000D3838D15058D3640BED1BFABA1194795",
   grantsPipeline: "https://burn.sharepoint.com/:x:/r/sites/BurnMFG_Main_Site2/3GA_General_and_Admin/_layouts/15/Doc.aspx?sourcedoc=%7BB44F68CD-811D-4A39-9B99-4B93FF8D1E2C%7D&file=2026%20-%20Grants%20&%20awards%20pipeline%20(final).xlsx=&action=default&mobileredirect=true",
+  // The Impact numbers app: paste its link between the quotes, e.g.
+  // impactNumbers: "https://impact-numbers.example.com",
+  impactNumbers: "",
 };
+
+const QUICK_BTN =
+  "flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50";
 
 type BoardColumnKey = "tracking" | "drafting" | "submitted" | "won";
 
@@ -50,7 +61,7 @@ const STATUS_LABELS: Record<TrackerStatus, string> = {
   lost: "Lost",
 };
 
-type SubTab = "board" | "priorities" | "pipeline";
+type SubTab = "board" | "pipeline" | "priorities" | "tasks";
 type OwnerFilter = "all" | "unassigned" | string;
 type GrantFieldName = "project_start_date" | "project_end_date" | "type_of_funding";
 
@@ -84,11 +95,11 @@ export default function ManagementDashboard() {
   const [ownerFilter, setOwnerFilter] = useState<OwnerFilter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragOverKey, setDragOverKey] = useState<BoardColumnKey | null>(null);
-
-  useEffect(() => {
-    loadBoard();
-    loadPriorities();
-  }, []);
+  // The Grant Writing PPT and the slide pop-ups share what people typed on slides.
+  const viewer = useViewer();
+  const slideApi = useSlideRows(viewer);
+  const [deckOpen, setDeckOpen] = useState(false);
+  const [slideTarget, setSlideTarget] = useState<SlideTarget | null>(null);
 
   async function loadBoard() {
     setLoading(true);
@@ -111,6 +122,14 @@ export default function ManagementDashboard() {
     if (fetchError) setError(fetchError.message);
     setPriorities((data as KeyPriority[]) ?? []);
   }
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      loadBoard();
+      loadPriorities();
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, []);
 
   const filteredItems = useMemo(() => {
     if (ownerFilter === "all") return items;
@@ -234,33 +253,42 @@ export default function ManagementDashboard() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap gap-2">
-        <a
-          href={QUICK_LINKS.weeklyPpt}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
-        >
+        <a href={QUICK_LINKS.weeklyPpt} target="_blank" rel="noopener noreferrer" className={QUICK_BTN}>
           📊 Weekly PPT
         </a>
-        <a
-          href={QUICK_LINKS.grantsPipeline}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
-        >
+        <button onClick={() => setDeckOpen(true)} className={QUICK_BTN}>
+          📽️ Grant Writing PPT
+        </button>
+        <a href={QUICK_LINKS.grantsPipeline} target="_blank" rel="noopener noreferrer" className={QUICK_BTN}>
           📈 Grants Pipeline
         </a>
+        {QUICK_LINKS.impactNumbers ? (
+          <a href={QUICK_LINKS.impactNumbers} target="_blank" rel="noopener noreferrer" className={QUICK_BTN}>
+            🌍 Impact numbers app
+          </a>
+        ) : (
+          <button
+            onClick={() => alert("The Impact numbers app link isn't set yet. Add it in components/ManagementDashboard.tsx (QUICK_LINKS.impactNumbers).")}
+            className={`${QUICK_BTN} opacity-70`}
+            title="Link not added yet"
+          >
+            🌍 Impact numbers app
+          </button>
+        )}
       </div>
 
       <div className="flex w-fit gap-1 rounded-lg bg-neutral-100 p-1">
         <SubTabButton active={subTab === "board"} onClick={() => setSubTab("board")}>
           Board view
         </SubTabButton>
+        <SubTabButton active={subTab === "pipeline"} onClick={() => setSubTab("pipeline")}>
+          Opportunity pipeline
+        </SubTabButton>
         <SubTabButton active={subTab === "priorities"} onClick={() => setSubTab("priorities")}>
           Key priorities
         </SubTabButton>
-        <SubTabButton active={subTab === "pipeline"} onClick={() => setSubTab("pipeline")}>
-          Opportunity pipeline
+        <SubTabButton active={subTab === "tasks"} onClick={() => setSubTab("tasks")}>
+          Task Manager
         </SubTabButton>
       </div>
 
@@ -360,7 +388,7 @@ export default function ManagementDashboard() {
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <p className="text-sm text-white">
-              Editable — click any cell to update it directly.
+              Editable — click any cell to update it directly. Each opportunity has a slide in the Grant Writing PPT: open it from the Notes column.
             </p>
             <button
               onClick={exportPrioritiesToExcel}
@@ -377,6 +405,9 @@ export default function ManagementDashboard() {
                   <th className="bg-[var(--accent)] px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-white">
                     Opportunity
                   </th>
+                  <th className="w-[34%] bg-[var(--accent)] px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-white">
+                    Notes · slide
+                  </th>
                   <th className="w-40 bg-[var(--accent)] px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-white">
                     Deadline
                   </th>
@@ -387,9 +418,27 @@ export default function ManagementDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {priorities.map((p) => (
+                {priorities.map((p) => {
+                  const slide = slideFor({ kind: "priority", id: p.id }, items, priorities, slideApi.rows);
+                  const tracked = matchPriority(p, items);
+                  return (
                   <tr key={p.id} className="border-t border-neutral-100">
                     <EditableCell value={p.opportunity} onSave={(v) => updatePriorityField(p.id, "opportunity", v)} />
+                    <td className="px-2 py-1">
+                      <button
+                        onClick={() => setSlideTarget({ kind: "priority", id: p.id })}
+                        className="group flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-orange-50"
+                        title="Open this opportunity's slide"
+                      >
+                        <span className="mt-0.5 shrink-0 rounded border border-neutral-300 bg-white px-1.5 text-[11px] font-semibold text-neutral-600 group-hover:border-[var(--accent)] group-hover:text-[var(--accent)]">
+                          🖼 Slide
+                        </span>
+                        <span className="line-clamp-2 text-xs text-neutral-600">
+                          {slide?.fields.description || <span className="text-neutral-400">Add notes on the slide…</span>}
+                        </span>
+                      </button>
+                      {tracked && <p className="px-2 text-[10px] text-emerald-700">In the tracker ✓ · same slide as there</p>}
+                    </td>
                     <EditableCell
                       value={p.deadline ?? ""}
                       onSave={(v) => updatePriorityField(p.id, "deadline", v)}
@@ -406,10 +455,11 @@ export default function ManagementDashboard() {
                       </button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
                 {priorities.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-4 py-8 text-center text-neutral-400">
+                    <td colSpan={5} className="px-4 py-8 text-center text-neutral-400">
                       No priorities yet — add one below.
                     </td>
                   </tr>
@@ -426,7 +476,37 @@ export default function ManagementDashboard() {
         </div>
       )}
 
-      {subTab === "pipeline" && <OpportunityPipeline items={items} />}
+      {subTab === "pipeline" && <OpportunityPipeline items={items} priorities={priorities} slideApi={slideApi} />}
+
+      {subTab === "tasks" && <TaskManager items={items} priorities={priorities} />}
+
+      {deckOpen && (
+        <GrantWritingDeck
+          items={items}
+          priorities={priorities}
+          rows={slideApi.rows}
+          notice={slideApi.notice}
+          onSave={slideApi.saveField}
+          onReset={slideApi.resetSlide}
+          onHide={slideApi.setHidden}
+          onClose={() => setDeckOpen(false)}
+        />
+      )}
+
+      {slideTarget &&
+        (() => {
+          const slide = slideFor(slideTarget, items, priorities, slideApi.rows);
+          return slide ? (
+            <SlidePopup
+              slide={slide}
+              notice={slideApi.notice}
+              onSave={(f, v) => slideApi.saveField(slide, f, v)}
+              onReset={() => slideApi.resetSlide(slide)}
+              onHide={(h) => slideApi.setHidden(slide, h)}
+              onClose={() => setSlideTarget(null)}
+            />
+          ) : null;
+        })()}
 
       {selected && (
         <DetailModal

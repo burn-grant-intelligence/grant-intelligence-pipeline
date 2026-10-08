@@ -18,7 +18,7 @@ import {
 import { searchWords } from "@/lib/opportunitySection";
 import { setViewer, useViewer } from "@/lib/viewer";
 import type { ActionItem, DraftGuidance, DraftLearning, DraftStage, DraftStageWork, OpportunityNote, TrackerItem } from "@/lib/types";
-import DraftWorkspace, { MoveToggle } from "@/components/DraftWorkspace";
+import DraftWorkspace from "@/components/DraftWorkspace";
 import StageClaude from "@/components/StageClaude";
 import { PersonChip } from "@/components/EligibilityReview";
 
@@ -108,6 +108,7 @@ export default function DraftApplication() {
   // concept's text across (each stage keeps its own version); First draft →
   // Submitted sets the tracker status and the submission date.
   async function moveTo(item: TrackerItem, to: BoardColumn) {
+    if (moving) return; // one move at a time while a drag is being saved
     const plan = planMove(item, to);
     if (!plan.ok) {
       setNotice(plan.reason);
@@ -197,7 +198,7 @@ export default function DraftApplication() {
         <h2 className="mb-1 text-lg font-semibold text-[var(--ink)]">Draft an application</h2>
         <p className="text-sm text-[var(--ink-muted)]">
           Each card has two buttons: <strong>✨ Claude</strong> for the stage you&apos;re at (start the chat once, paste its link, and everyone opens the same chat) and{" "}
-          <strong>Open workspace</strong> for meeting notes, action points, donor guidance and the history. Use the toggle (or drag the card) to move it along.
+          <strong>Open workspace</strong> for meeting notes, management and donor guidance, your notes and the history. Drag a card to the next column to move it along.
         </p>
       </section>
 
@@ -314,11 +315,9 @@ export default function DraftApplication() {
                     work={workFor(item.id, stageOf(item))}
                     viewer={viewer}
                     forMe={mineById.get(item.id) ?? 0}
-                    busy={moving}
                     prompt={() => promptFor(item)}
                     onWorkSaved={onWorkSaved}
                     onOpen={() => setOpenId(item.id)}
-                    onMove={(to) => moveTo(item, to)}
                   />
                 ))}
               </div>
@@ -339,7 +338,6 @@ export default function DraftApplication() {
           prompt={() => promptFor(openItem)}
           onClose={() => setOpenId(null)}
           onWorkSaved={onWorkSaved}
-          onRequestMove={(to) => moveTo(openItem, to)}
           onGuidanceChange={(update) => setGuidance((prev) => update(prev))}
           onNotesChange={(update) => setNotes((prev) => update(prev))}
           onActionsChange={(update) => setActions((prev) => update(prev))}
@@ -354,21 +352,17 @@ function StageCard({
   work,
   viewer,
   forMe,
-  busy,
   prompt,
   onWorkSaved,
   onOpen,
-  onMove,
 }: {
   item: TrackerItem;
   work: DraftStageWork | null;
   viewer: string | null;
   forMe: number;
-  busy: boolean;
   prompt: () => string;
   onWorkSaved: (row: DraftStageWork) => void;
   onOpen: () => void;
-  onMove: (to: BoardColumn) => void;
 }) {
   const column = columnOf(item);
   const submitted = column === "submitted";
@@ -394,7 +388,6 @@ function StageCard({
           </span>
         )}
       </div>
-      <MoveToggle column={column} disabled={busy} onMove={onMove} compact />
       <StageClaude item={item} stage={stageOf(item)} work={work} viewer={viewer} prompt={prompt} onSaved={onWorkSaved} compact readOnly={submitted} />
       <button onClick={onOpen} className="self-start rounded-md border border-neutral-300 bg-white px-2.5 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50">
         Open workspace

@@ -185,6 +185,67 @@ export function decisionOf(body: string): Decision {
   return null;
 }
 
+// ── The final result: a person's review overrides the automatic check ──
+
+export type FinalResult = {
+  decision: "fit" | "not_fit";
+  /** Who reviewed it (full name), when a review reply records the decision. */
+  by: string | null;
+  /** The reviewer's own notes, without the "✓ Fits —" heading. */
+  notes: string;
+  /** One sentence for the card's headline. */
+  statement: string;
+};
+
+/** Reply body without its "✓ Fits —" / "✕ Not a fit —" heading. */
+export function notesOfOutcome(body: string): string {
+  return body.replace(/^(✓ Fits|✕ Not a fit)\s*(—\s*)?/, "").trim();
+}
+
+/**
+ * When a person has made the Fit / Not fit call, that is the opportunity's
+ * result and the automatic check becomes the "initial" one. If the call was
+ * made in an eligibility review, the headline names the reviewer and carries
+ * their notes. Returns null while nobody has decided.
+ *
+ * `replies` should be the replies on this opportunity's review action points.
+ */
+export function finalResult(
+  item: ReviewItem,
+  replies: Pick<ActionReply, "author" | "body" | "created_at">[]
+): FinalResult | null {
+  const status = item.fit_status ?? "unreviewed";
+  if (status === "unreviewed" || !humanDecided(item)) return null;
+  const decision: "fit" | "not_fit" = status === "fit" ? "fit" : "not_fit";
+  const latest = [...replies]
+    .filter((r) => decisionOf(r.body))
+    .sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""))
+    .pop();
+  const reviewed = latest && decisionOf(latest.body) === decision ? latest : null;
+  const by = reviewed ? canonicalLead(reviewed.author) : null;
+  const who = by ? ` by ${firstName(by)}` : "";
+  if (reviewed) {
+    return {
+      decision,
+      by,
+      notes: notesOfOutcome(reviewed.body),
+      statement:
+        decision === "fit"
+          ? `Fit — after further review${who}, this opportunity was found to be a fit.`
+          : `Not a fit — after further review${who}, this opportunity was found not to be a fit.`,
+    };
+  }
+  return {
+    decision,
+    by: null,
+    notes: "",
+    statement:
+      decision === "fit"
+        ? "Fit — the team marked this opportunity as a fit, which replaces the automatic check."
+        : "Not a fit — the team marked this opportunity as not a fit, which replaces the automatic check.",
+  };
+}
+
 // ── Writing a plan ──
 
 /* eslint-disable @typescript-eslint/no-explicit-any */

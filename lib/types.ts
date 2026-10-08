@@ -313,7 +313,7 @@ export interface ActionReply {
 }
 
 // One notification for one person (team_notifications table).
-export type NotificationKind = "mention" | "everyone" | "reply" | "removed";
+export type NotificationKind = "mention" | "everyone" | "reply" | "removed" | "chat";
 export interface TeamNotification {
   id: string;
   recipient: string;
@@ -362,4 +362,55 @@ export interface KeyPriority {
   sort_order: number;
   created_at: string;
   updated_at: string;
+}
+
+// ── Management Dashboard tools (supabase/management_tools_migration_2026-10-08.sql) ──
+
+// What someone typed over the live data on an opportunity's slide (lib/slides.ts).
+export interface OpportunitySlideRow {
+  id: string;
+  tracker_item_id: string | null;
+  key_priority_id: string | null;
+  fields: Record<string, string>;
+  hidden: boolean;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeamMessage {
+  id: string;
+  channel: string;
+  author: string | null;
+  body: string;
+  created_at: string;
+  edited_at: string | null;
+}
+
+export interface TeamTask {
+  id: string;
+  title: string;
+  notes: string | null;
+  assignee: string | null;
+  due_date: string | null;
+  done: boolean;
+  done_at: string | null;
+  tracker_item_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeamEvent {
+  id: string;
+  title: string;
+  event_date: string;
+  start_time: string | null;
+  end_time: string | null;
+  attendees: string[];
+  location: string | null;
+  notes: string | null;
+  tracker_item_id: string | null;
+  created_by: string | null;
+  created_at: string;
 }

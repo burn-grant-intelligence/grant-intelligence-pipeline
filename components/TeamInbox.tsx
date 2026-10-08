@@ -24,6 +24,7 @@ const KIND_TEXT: Record<string, { icon: string; verb: string }> = {
   everyone: { icon: "👥", verb: "tagged everyone" },
   reply: { icon: "💬", verb: "replied" },
   removed: { icon: "🗑️", verb: "removed your opportunity" },
+  chat: { icon: "💬", verb: "tagged you in the team chat" },
 };
 
 // Open or folded — remembered per browser.

@@ -18,7 +18,7 @@ const QUICK_LINKS = {
   grantsPipeline: "https://burn.sharepoint.com/:x:/r/sites/BurnMFG_Main_Site2/3GA_General_and_Admin/_layouts/15/Doc.aspx?sourcedoc=%7BB44F68CD-811D-4A39-9B99-4B93FF8D1E2C%7D&file=2026%20-%20Grants%20&%20awards%20pipeline%20(final).xlsx=&action=default&mobileredirect=true",
   // The Impact numbers app: paste its link between the quotes, e.g.
   // impactNumbers: "https://impact-numbers.example.com",
-  impactNumbers: "",
+  impactNumbers: "https://carbonmonitoring.ecoadatasense.com/impact_numbers_automation/",
 };
 
 const QUICK_BTN =

@@ -10,6 +10,7 @@ import { searchWords } from "@/lib/opportunitySection";
 import { setViewer, useViewer } from "@/lib/viewer";
 import {
   applyReviewPlan,
+  finalResult,
   isReviewAction,
   nextStepFor,
   openReviewFor,
@@ -505,6 +506,18 @@ export default function EligibilityTracker() {
           const pastedDraft = pasteDrafts[item.id] ?? "";
           const showPaste = !!pasteOpen[item.id];
           const step = stepById.get(item.id) ?? null;
+          // A team member's review overrides the automatic check: their call is the
+          // result, and the automatic one is kept below as the "initial check".
+          const itemReviews = actions.filter((x) => x.tracker_item_id === item.id && isReviewAction(x));
+          const final = finalResult(
+            item,
+            replies.filter((r) => itemReviews.some((x) => x.id === r.action_id))
+          );
+          // The "Why" box still holds the automatic text (FIT — …); show the team's call instead.
+          const shownFitNotes =
+            final && /^(FIT|NOT FIT|NEEDS FURTHER REVIEW)\b/.test(item.fit_notes ?? "")
+              ? [final.statement, final.notes].filter(Boolean).join(" ")
+              : item.fit_notes ?? "";
           const myActions = me ? myActionsById.get(item.id) ?? [] : [];
 
           return (
@@ -643,7 +656,17 @@ export default function EligibilityTracker() {
                 </Field>
               </div>
 
-              {grant?.eligibility_report && <VerdictPanel report={grant.eligibility_report} />}
+              {final && (
+                <div
+                  className={`rounded-md border px-3 py-2 ${
+                    final.decision === "fit" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-900"
+                  }`}
+                >
+                  <p className="text-sm font-medium">{final.statement}</p>
+                  {final.notes && <p className="mt-1 whitespace-pre-wrap text-sm font-normal">{final.notes}</p>}
+                </div>
+              )}
+              {grant?.eligibility_report && <VerdictPanel report={grant.eligibility_report} initial={!!final} />}
 
               <EligibilityReview
                 item={item}
@@ -709,7 +732,8 @@ export default function EligibilityTracker() {
                     ))}
                 </div>
                 <input
-                  defaultValue={item.fit_notes ?? ""}
+                  key={`${item.id}-${shownFitNotes}`}
+                  defaultValue={shownFitNotes}
                   onBlur={(e) => updateFitNotes(item.id, e.target.value)}
                   placeholder="Why (optional notes)…"
                   className="min-w-[200px] flex-1 rounded-md border border-neutral-200 px-2 py-1 text-xs text-neutral-600"
@@ -748,11 +772,12 @@ function RuleList({ title, rules, tone }: { title: string; rules: RuleResult[]; 
 // The engine's reasoning for one opportunity: a one-line verdict, expandable
 // into what blocked it, what to verify, watch-outs, and required-document
 // readiness. The 0–100 score is stored on the grant but deliberately not shown.
-function VerdictPanel({ report }: { report: EligibilityReport }) {
+function VerdictPanel({ report, initial = false }: { report: EligibilityReport; initial?: boolean }) {
   const docsNeedingAttention = report.docs.filter((d) => d.status === "needs_partner" || d.status === "unknown");
   return (
-    <details className={`rounded-md border px-3 py-2 ${VERDICT_STYLES[report.verdict]}`}>
+    <details className={`rounded-md border px-3 py-2 ${initial ? "border-neutral-200 bg-neutral-50 text-neutral-600" : VERDICT_STYLES[report.verdict]}`}>
       <summary className="cursor-pointer text-sm font-medium">
+        {initial && <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-neutral-400">Initial check ·</span>}
         {VERDICT_LABELS[report.verdict]} — <span className="font-normal">{report.summary}</span>
       </summary>
       <div className="mt-3 flex flex-col gap-3 rounded bg-white/70 p-3 text-neutral-700">
